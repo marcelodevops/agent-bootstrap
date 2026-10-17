@@ -2,6 +2,8 @@ import textwrap
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+import typer
 from typer.testing import CliRunner
 
 from bootstrapper.cli import app
@@ -199,6 +201,34 @@ def test_create_ai_project_with_github_remote(tmp_path, monkeypatch):
     assert "AGENTS.md" in pushed
     assert "CLAUDE.md" in pushed
     assert ".github/copilot-instructions.md" in pushed
+
+
+def test_create_rejects_escaping_outputs_dir(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PROJBOOT_HOME", str(tmp_path / "home"))
+    res = _run(["create", "proj", "-l", "none", "--outputs-dir", "../escape", "--no-git"])
+    assert res.exit_code != 0
+    # Validation happens before any write, so the project dir is never created.
+    assert not (tmp_path / "proj").exists()
+
+
+def test_create_rejects_colliding_prompts_file(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PROJBOOT_HOME", str(tmp_path / "home"))
+    res = _run(
+        ["create", "proj", "-l", "python", "--prompts-file", "src/main.py", "--no-git"]
+    )
+    assert res.exit_code != 0
+
+
+def test_write_local_no_partial_on_escape(tmp_path):
+    from bootstrapper.cli import _write_local
+
+    files = {"ok.txt": "data", "../escape.txt": "bad"}
+    with pytest.raises(typer.Exit):
+        _write_local(tmp_path / "out", files, force=False)
+    # First file must NOT have been written because validation runs up front.
+    assert not (tmp_path / "out" / "ok.txt").exists()
 
 
 def test_config_init_and_list_presets(tmp_path, monkeypatch):

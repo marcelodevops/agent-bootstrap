@@ -73,8 +73,14 @@ def _write_local(target: Path, files: dict[str, str], force: bool) -> None:
     if target.exists() and any(target.iterdir()) and not force:
         typer.echo(f"Refusing to overwrite non-empty dir {target}/ (use --force)", err=True)
         raise typer.Exit(code=1)
-    for rel, content in files.items():
-        path = _safe_join(target, rel)
+    # Validate every path first so an escaping/empty path aborts before any
+    # file is written, instead of leaving a half-generated project behind.
+    try:
+        planned = [(content, _safe_join(target, rel)) for rel, content in files.items()]
+    except ValueError as exc:
+        typer.echo(f"Invalid output path: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    for content, path in planned:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content)
     typer.echo(f"Scaffolded {len(files)} file(s) into {target}/")
@@ -279,6 +285,8 @@ def create(
             extra_vars=_parse_vars(variable),
         )
     except KeyError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
     target = Path(name)

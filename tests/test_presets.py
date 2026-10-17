@@ -75,6 +75,31 @@ def test_resolve_preset_unknown_raises_key_error(tmp_path):
         resolve_preset("nonexistent", config_dir=tmp_path)
 
 
+def test_validate_rel_path_accepts_safe_relative():
+    from bootstrapper.presets import validate_rel_path
+
+    assert validate_rel_path("docs/PROMPTS.md", "x") == "docs/PROMPTS.md"
+    assert validate_rel_path("out/artifacts", "x") == "out/artifacts"
+
+
+@pytest.mark.parametrize("bad", ["../escape", "/abs/path", "~/home", "a/../../b"])
+def test_validate_rel_path_rejects_unsafe(bad):
+    from bootstrapper.presets import validate_rel_path
+
+    with pytest.raises(ValueError):
+        validate_rel_path(bad, "--outputs-dir")
+
+
+def test_resolve_preset_rejects_escaping_outputs_dir(tmp_path):
+    with pytest.raises(ValueError, match="must not contain"):
+        resolve_preset("default", outputs_dir="../outside", config_dir=tmp_path)
+
+
+def test_resolve_preset_rejects_absolute_prompts_file(tmp_path):
+    with pytest.raises(ValueError, match="relative to the project root"):
+        resolve_preset("default", prompts_file="/etc/passwd", config_dir=tmp_path)
+
+
 def test_init_config_dir_and_load_user_store(tmp_path):
     created = init_config_dir(tmp_path)
     assert (tmp_path / "presets.toml").exists()

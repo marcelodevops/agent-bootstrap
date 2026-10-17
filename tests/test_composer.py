@@ -1,7 +1,26 @@
 from unittest.mock import patch
 
-from bootstrapper.composer import compose_project_files, run_post_hooks
+import pytest
+
+from bootstrapper.composer import (
+    PathCollisionError,
+    compose_project_files,
+    run_post_hooks,
+)
 from bootstrapper.presets import resolve_preset
+
+
+def test_compose_rejects_prompts_file_colliding_with_template(tmp_path):
+    # --prompts-file src/main.py would silently clobber the python entrypoint.
+    preset = resolve_preset("default", prompts_file="src/main.py", agents=[])
+    with pytest.raises(PathCollisionError, match="src/main.py"):
+        compose_project_files(
+            name="p",
+            description="d",
+            lang="python",
+            preset=preset,
+            config_dir=tmp_path,
+        )
 
 
 def test_compose_python_with_claude_and_copilot(tmp_path):

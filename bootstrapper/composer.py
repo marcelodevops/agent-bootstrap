@@ -14,6 +14,22 @@ from .templates import LICENSES, get_template, render
 DEFAULT_GRAPHIFY_BIN = Path("/Users/mac/.local/bin/graphify")
 
 
+class PathCollisionError(ValueError):
+    """Two composition layers produce the same path with different content."""
+
+
+def _merge(dst: dict[str, str], src: dict[str, str], layer: str) -> None:
+    """Merge ``src`` into ``dst``, refusing silent overwrites of differing files."""
+    for key, value in src.items():
+        if key in dst and dst[key] != value:
+            raise PathCollisionError(
+                f"path '{key}' is produced by the '{layer}' layer but already "
+                "exists with different content; adjust --prompts-file/"
+                "--outputs-dir/--scripts-dir or the agent set to avoid the clash"
+            )
+        dst[key] = value
+
+
 def compose_project_files(
     *,
     name: str,
@@ -40,15 +56,18 @@ def compose_project_files(
         variables.update(extra_vars)
 
     raw_files: dict[str, str] = {}
-    spec = get_template(lang)
-    raw_files.update(spec["files"])
-    raw_files.update(universal_harness_files(preset, config_dir=config_dir))
-    raw_files.update(agent_overlay_files(preset.agents))
+    _merge(raw_files, get_template(lang)["files"], "base template")
+    _merge(
+        raw_files,
+        universal_harness_files(preset, config_dir=config_dir),
+        "agent harness",
+    )
+    _merge(raw_files, agent_overlay_files(preset.agents), "assistant overlays")
 
     if license != "none":
         lic_body = LICENSES.get(license)
         if lic_body is not None:
-            raw_files["LICENSE"] = lic_body
+            _merge(raw_files, {"LICENSE": lic_body}, "license")
 
     return {
         render(path, **variables): render(body, **variables)
