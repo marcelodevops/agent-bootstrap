@@ -40,6 +40,7 @@ def compose_project_files(
     holder: str = "",
     extra_vars: dict[str, str] | None = None,
     config_dir: Path | None = None,
+    include_graphify: bool = True,
 ) -> dict[str, str]:
     """Compose and render all files for an AI-enabled project scaffold."""
     variables: dict[str, str] = {
@@ -69,10 +70,31 @@ def compose_project_files(
         if lic_body is not None:
             _merge(raw_files, {"LICENSE": lic_body}, "license")
 
-    return {
+    rendered = {
         render(path, **variables): render(body, **variables)
         for path, body in raw_files.items()
     }
+    if not include_graphify:
+        rendered = _strip_graphify(rendered)
+    return rendered
+
+
+def _strip_graphify(files: dict[str, str]) -> dict[str, str]:
+    """Drop graphify scaffolding and any line that instructs using graphify.
+
+    Keeps generated instructions honest when graphify was skipped (--no-graphify)
+    so the project never mandates a tool it did not set up.
+    """
+    out: dict[str, str] = {}
+    for path, body in files.items():
+        if "graphify" in path.lower():
+            continue
+        kept = [ln for ln in body.splitlines() if "graphify" not in ln.lower()]
+        text = "\n".join(kept)
+        if body.endswith("\n") and text:
+            text += "\n"
+        out[path] = text
+    return out
 
 
 def _find_graphify() -> str | None:

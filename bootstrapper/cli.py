@@ -303,6 +303,7 @@ def create(
             license=license,
             holder=holder,
             extra_vars=_parse_vars(variable),
+            include_graphify=not no_graphify,
         )
     except KeyError as exc:
         raise typer.BadParameter(str(exc)) from exc

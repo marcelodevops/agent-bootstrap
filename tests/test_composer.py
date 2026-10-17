@@ -65,6 +65,34 @@ def test_compose_python_with_claude_and_copilot(tmp_path):
     assert "Alice" in files["LICENSE"]
 
 
+def test_compose_keeps_graphify_by_default(tmp_path):
+    preset = resolve_preset("default", agents=["claude"], config_dir=tmp_path)
+    files = compose_project_files(
+        name="g", description="d", lang="python", preset=preset, config_dir=tmp_path
+    )
+    assert "graphify-out/.gitkeep" in files
+    assert "graphify" in files["AGENTS.md"].lower()
+    assert "graphify" in files["CLAUDE.md"].lower()
+
+
+def test_compose_strips_graphify_when_disabled(tmp_path):
+    preset = resolve_preset("default", agents=["claude"], config_dir=tmp_path)
+    files = compose_project_files(
+        name="g",
+        description="d",
+        lang="python",
+        preset=preset,
+        config_dir=tmp_path,
+        include_graphify=False,
+    )
+    assert "graphify-out/.gitkeep" not in files
+    assert "graphify" not in files["AGENTS.md"].lower()
+    assert "graphify" not in files["CLAUDE.md"].lower()
+    # unrelated harness content still present
+    assert "AGENTS.md" in files
+    assert ".remember/MEMORY.md" in files
+
+
 def test_run_post_hooks_invokes_git_and_graphify(tmp_path):
     calls: list[list[str]] = []
 

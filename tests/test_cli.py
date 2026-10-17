@@ -149,9 +149,15 @@ def test_create_ai_project_local_with_agents_and_custom_dirs(tmp_path, monkeypat
     assert (proj / "AGENTS.md").exists()
     assert (proj / "CLAUDE.md").exists()
     assert (proj / ".github" / "copilot-instructions.md").exists()
-    assert (proj / "graphify-out" / ".gitkeep").exists()
+    # --no-graphify must drop graphify scaffolding AND its instruction lines.
+    assert not (proj / "graphify-out" / ".gitkeep").exists()
+    assert "graphify" not in (proj / "AGENTS.md").read_text().lower()
+    assert "graphify" not in (proj / "CLAUDE.md").read_text().lower()
     assert (proj / ".remember" / "MEMORY.md").exists()
     assert (proj / ".agents" / "skills" / "project-conventions" / "SKILL.md").exists()
+    assert "graphify" not in (
+        proj / ".agents" / "skills" / "project-conventions" / "SKILL.md"
+    ).read_text().lower()
     assert (proj / "custom-outputs" / ".gitkeep").exists()
     assert (proj / "custom-scripts" / ".gitkeep").exists()
     assert (proj / "MY_PROMPTS.md").exists()
