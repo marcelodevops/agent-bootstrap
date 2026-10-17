@@ -80,3 +80,44 @@ def test_run_post_hooks_invokes_git_and_graphify(tmp_path):
     assert ["git", "init", "-b", "main"] in calls
     assert ["/usr/local/bin/graphify", "update", "."] in calls
     assert len(messages) == 2
+
+
+def test_run_post_hooks_connects_remote_and_commits(tmp_path):
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, cwd, check, capture_output, text):
+        calls.append(cmd)
+
+    with patch("bootstrapper.composer.subprocess.run", side_effect=fake_run):
+        messages = run_post_hooks(
+            tmp_path,
+            init_git=True,
+            run_graphify=False,
+            connect_remote_url="https://github.com/acme/demo.git",
+            make_commit=True,
+        )
+
+    assert ["git", "remote", "add", "origin", "https://github.com/acme/demo.git"] in calls
+    assert ["git", "add", "-A"] in calls
+    assert any(c[:1] == ["git"] and "commit" in c for c in calls)
+    assert any("origin" in m for m in messages)
+    assert "Created initial commit" in messages
+
+
+def test_run_post_hooks_skips_remote_when_no_git(tmp_path):
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, cwd, check, capture_output, text):
+        calls.append(cmd)
+
+    with patch("bootstrapper.composer.subprocess.run", side_effect=fake_run):
+        # init_git=False must not run ANY git command (no init, remote, commit).
+        run_post_hooks(
+            tmp_path,
+            init_git=False,
+            run_graphify=False,
+            connect_remote_url="https://x/y.git",
+            make_commit=True,
+        )
+
+    assert calls == []

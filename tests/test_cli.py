@@ -231,6 +231,42 @@ def test_write_local_no_partial_on_escape(tmp_path):
     assert not (tmp_path / "out" / "ok.txt").exists()
 
 
+def test_clone_produces_connected_local_repo(tmp_path, monkeypatch):
+    # Real git (no network): --clone --create should leave origin + a commit.
+    import subprocess
+
+    import bootstrapper.github_utils as gu
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PROJBOOT_HOME", str(tmp_path / "home"))
+    fake_repo = MagicMock()
+    fake_repo.clone_url = "https://github.com/acme/clonetest.git"
+    monkeypatch.setattr(gu, "get_github", lambda: MagicMock())
+    monkeypatch.setattr(gu, "get_owner", lambda gh, org: MagicMock())
+    monkeypatch.setattr(gu, "create_repo", lambda owner, n, d, p, force=False: fake_repo)
+    monkeypatch.setattr(gu, "add_file", lambda *a, **k: None)
+
+    res = _run(
+        ["create", "clonetest", "-l", "none", "--agent", "claude",
+         "--create", "-r", "github", "--clone", "--no-graphify"]
+    )
+    assert res.exit_code == 0, res.stdout
+
+    proj = tmp_path / "clonetest"
+    remote = subprocess.run(
+        ["git", "-C", str(proj), "remote", "get-url", "origin"],
+        capture_output=True, text=True,
+    )
+    assert remote.returncode == 0
+    assert remote.stdout.strip() == fake_repo.clone_url
+
+    commits = subprocess.run(
+        ["git", "-C", str(proj), "rev-list", "--count", "HEAD"],
+        capture_output=True, text=True,
+    )
+    assert commits.stdout.strip() == "1"  # initial commit exists
+
+
 def test_push_refuses_existing_repo_without_force(tmp_path, monkeypatch):
     import bootstrapper.github_utils as gu
     from bootstrapper.github_utils import RepoExistsError

@@ -89,8 +89,10 @@ def run_post_hooks(
     *,
     init_git: bool = True,
     run_graphify: bool = True,
+    connect_remote_url: str | None = None,
+    make_commit: bool = False,
 ) -> list[str]:
-    """Run best-effort local post-scaffold hooks (git init, graphify update)."""
+    """Run best-effort local post-scaffold hooks (git init/remote/commit, graphify)."""
     messages: list[str] = []
 
     if init_git:
@@ -105,6 +107,26 @@ def run_post_hooks(
             messages.append("Initialized git repository (main)")
         except (FileNotFoundError, subprocess.CalledProcessError) as exc:
             messages.append(f"Skipped git init: {exc}")
+
+        if connect_remote_url:
+            if _git_ok(target, ["git", "remote", "add", "origin", connect_remote_url]):
+                messages.append(f"Added origin remote: {connect_remote_url}")
+            elif _git_ok(target, ["git", "remote", "set-url", "origin", connect_remote_url]):
+                messages.append(f"Updated origin remote: {connect_remote_url}")
+
+        if make_commit:
+            _git_ok(target, ["git", "add", "-A"])
+            if _git_ok(
+                target,
+                [
+                    "git",
+                    "-c", "user.name=projboot",
+                    "-c", "user.email=projboot@localhost",
+                    "commit",
+                    "-m", "Bootstrap project scaffold",
+                ],
+            ):
+                messages.append("Created initial commit")
 
     if run_graphify:
         graphify_bin = _find_graphify()
@@ -124,3 +146,12 @@ def run_post_hooks(
             messages.append("Skipped graphify update (graphify binary not found)")
 
     return messages
+
+
+def _git_ok(cwd: Path, cmd: list[str]) -> bool:
+    """Run a best-effort git command; True on success, False otherwise."""
+    try:
+        subprocess.run(cmd, cwd=cwd, check=True, capture_output=True, text=True)
+        return True
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return False
