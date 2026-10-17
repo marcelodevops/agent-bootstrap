@@ -29,13 +29,13 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-latest
-    environment: pypi
-    permissions:
-      id-token: write   # OIDC for PyPI trusted publishing
     steps:
       - uses: actions/download-artifact@v4
         with:
           name: dist
           path: dist/
-      - name: Publish to PyPI (trusted publishing, no stored token)
-        uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@v1.12.3
+        with:
+          user: __token__
+          password: ${{ secrets.PYPI_API_TOKEN }}
