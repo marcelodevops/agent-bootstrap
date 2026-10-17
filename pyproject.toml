@@ -17,6 +17,7 @@ dev = ["pytest>=8"]
 
 [project.scripts]
 project-bootstrapper = "bootstrapper.cli:app"
+projboot = "bootstrapper.cli:app"
 
 [tool.setuptools]
 packages = ["bootstrapper"]

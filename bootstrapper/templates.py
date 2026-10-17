@@ -209,6 +209,18 @@ TEMPLATES: dict[str, dict] = {
             ),
         },
     },
+    "none": {
+        "name": "none",
+        "description": "Minimal agent-only repository (README and .gitignore only)",
+        "files": {
+            "README.md": "# $name\n\n$description\n",
+            ".gitignore": ".env\n.venv/\n__pycache__/\n*.py[cod]\n",
+        },
+    },
+}
+
+TEMPLATE_ALIASES: dict[str, str] = {
+    "python": "python-microservice",
 }
 
 LICENSES: dict[str, str] = {
@@ -250,8 +262,10 @@ def template_names() -> list[str]:
 
 
 def get_template(name: str) -> dict:
-    if name not in TEMPLATES:
+    resolved = TEMPLATE_ALIASES.get(name, name)
+    if resolved not in TEMPLATES:
         raise KeyError(
             f"Unknown template '{name}'. Available: {', '.join(template_names())}"
         )
-    return TEMPLATES[name]
+    return TEMPLATES[resolved]
+

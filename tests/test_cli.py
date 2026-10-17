@@ -117,3 +117,100 @@ def test_init_dispatches_to_github(tmp_path, monkeypatch):
     assert "package.json" in pushed
     assert "src/index.ts" in pushed
     fake_repo  # repo object was used by add_file
+
+
+def test_create_ai_project_local_with_agents_and_custom_dirs(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PROJBOOT_HOME", str(tmp_path / "projboot_home"))
+    res = _run(
+        [
+            "create",
+            "new-project",
+            "-l",
+            "python",
+            "-a",
+            "claude",
+            "-a",
+            "gh-copilot",
+            "--outputs-dir",
+            "custom-outputs",
+            "--scripts-dir",
+            "custom-scripts",
+            "--prompts-file",
+            "MY_PROMPTS.md",
+            "--no-git",
+            "--no-graphify",
+        ]
+    )
+    assert res.exit_code == 0, res.stdout
+    proj = tmp_path / "new-project"
+    assert (proj / "AGENTS.md").exists()
+    assert (proj / "CLAUDE.md").exists()
+    assert (proj / ".github" / "copilot-instructions.md").exists()
+    assert (proj / "graphify-out" / ".gitkeep").exists()
+    assert (proj / ".remember" / "MEMORY.md").exists()
+    assert (proj / ".agents" / "skills" / "project-conventions" / "SKILL.md").exists()
+    assert (proj / "custom-outputs" / ".gitkeep").exists()
+    assert (proj / "custom-scripts" / ".gitkeep").exists()
+    assert (proj / "MY_PROMPTS.md").exists()
+    assert "custom-outputs/" in (proj / "CLAUDE.md").read_text()
+    assert "custom-scripts/" in (proj / ".github" / "copilot-instructions.md").read_text()
+
+
+def test_create_ai_project_with_github_remote(tmp_path, monkeypatch):
+    import bootstrapper.github_utils as gu
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PROJBOOT_HOME", str(tmp_path / "projboot_home"))
+
+    calls: list[tuple[str, str]] = []
+    fake_repo = MagicMock()
+    fake_repo.clone_url = "https://github.com/acme/new-project.git"
+
+    monkeypatch.setattr(gu, "get_github", lambda: MagicMock())
+    monkeypatch.setattr(gu, "get_owner", lambda gh, org: MagicMock())
+    monkeypatch.setattr(gu, "create_repo", lambda owner, n, d, p: fake_repo)
+    monkeypatch.setattr(
+        gu, "add_file", lambda repo, path, content, message: calls.append((path, content))
+    )
+
+    res = _run(
+        [
+            "create",
+            "new-project",
+            "-l",
+            "python",
+            "-a",
+            "claude",
+            "-a",
+            "gh-copilot",
+            "-r",
+            "github",
+            "--create",
+            "--clone",
+            "--no-git",
+            "--no-graphify",
+        ]
+    )
+    assert res.exit_code == 0, res.stdout
+    # Local directory is created AND remote files are pushed
+    assert (tmp_path / "new-project" / "CLAUDE.md").exists()
+    pushed = {p for p, _ in calls}
+    assert "AGENTS.md" in pushed
+    assert "CLAUDE.md" in pushed
+    assert ".github/copilot-instructions.md" in pushed
+
+
+def test_config_init_and_list_presets(tmp_path, monkeypatch):
+    cfg_dir = tmp_path / "projboot_cfg"
+    monkeypatch.setenv("PROJBOOT_HOME", str(cfg_dir))
+
+    res_init = _run(["config-init"])
+    assert res_init.exit_code == 0, res_init.stdout
+    assert (cfg_dir / "presets.toml").exists()
+
+    res_list = _run(["list-presets"])
+    assert res_list.exit_code == 0, res_list.stdout
+    assert "default" in res_list.stdout
+    assert "clean-arch" in res_list.stdout
+
