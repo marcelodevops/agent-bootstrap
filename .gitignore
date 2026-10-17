@@ -213,3 +213,6 @@ __marimo__/
 !.env*.example
 !.env*.sample
 !.env*.template
+
+# Graphify knowledge graph artifacts (regenerated locally, not tracked)
+graphify-out/
