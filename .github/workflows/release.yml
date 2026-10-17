@@ -16,11 +16,16 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install build frontend
-        run: python -m pip install --upgrade pip build
+        run: python -m pip install --upgrade pip build twine
       - name: Build sdist and wheel
         run: python -m build
-      - name: Validate metadata
-        run: python -m pip install --no-deps dist/*.whl && agent-bootstrap --help >/dev/null && projboot --help >/dev/null
+      - name: Check distribution metadata
+        run: python -m twine check dist/*
+      - name: Smoke-test console scripts
+        run: |
+          python -m pip install dist/*.whl
+          agent-bootstrap --help >/dev/null
+          projboot --help >/dev/null
       - uses: actions/upload-artifact@v4
         with:
           name: dist
