@@ -1,4 +1,4 @@
-"""Typer CLI for project-bootstrapper."""
+"""Typer CLI for project-bootstrapper (and projboot)."""
 
 from __future__ import annotations
 
@@ -8,10 +8,18 @@ from pathlib import Path
 import typer
 
 from . import dirtree
+from .agents import SUPPORTED_AGENTS
+from .composer import compose_project_files, run_post_hooks
+from .presets import (
+    get_config_dir,
+    init_config_dir,
+    load_presets,
+    resolve_preset,
+)
 from .templates import LICENSES, get_template, render, template_names
 
 app = typer.Typer(
-    help="Scaffold projects from curated templates or a dirtree layout.",
+    help="Scaffold projects and AI agent harnesses from curated templates, presets, or dirtrees.",
     no_args_is_help=True,
 )
 
@@ -72,6 +80,28 @@ def _write_local(target: Path, files: dict[str, str], force: bool) -> None:
     typer.echo(f"Scaffolded {len(files)} file(s) into {target}/")
 
 
+def _push_github(
+    files: dict[str, str],
+    *,
+    name: str,
+    description: str,
+    private: bool,
+    org: str | None,
+) -> None:
+    """Create a GitHub repository and upload all scaffolded files."""
+    # Imported lazily so --local and tests never require PyGithub/network.
+    from .github_utils import add_file, create_repo, get_github, get_owner
+
+    gh = get_github()
+    owner = get_owner(gh, org)
+    repo = create_repo(owner, name, description, private)
+    typer.echo(f"Repo ready: {repo.clone_url}")
+    for path, content in files.items():
+        add_file(repo, path, content, f"Add {path}")
+        typer.echo(f"  + {path}")
+    typer.echo("Done.")
+
+
 def _emit(
     files: dict[str, str],
     *,
@@ -86,18 +116,13 @@ def _emit(
     if local:
         _write_local(Path(name), files, force)
         return
-
-    # Imported lazily so --local and tests never require PyGithub/network.
-    from .github_utils import add_file, create_repo, get_github, get_owner
-
-    gh = get_github()
-    owner = get_owner(gh, org)
-    repo = create_repo(owner, name, description, private)
-    typer.echo(f"Repo ready: {repo.clone_url}")
-    for path, content in files.items():
-        add_file(repo, path, content, f"Add {path}")
-        typer.echo(f"  + {path}")
-    typer.echo("Done.")
+    _push_github(
+        files,
+        name=name,
+        description=description,
+        private=private,
+        org=org,
+    )
 
 
 def _build_template_files(
@@ -144,6 +169,136 @@ def list_templates() -> None:
     """Show available templates and their descriptions."""
     for name in template_names():
         typer.echo(f"  {name:24} {get_template(name)['description']}")
+
+
+@app.command("list-presets")
+def list_presets_cmd() -> None:
+    """Show available workflow presets (built-in + ~/.config/projboot/presets.toml)."""
+    presets = load_presets()
+    for name in sorted(presets):
+        p = presets[name]
+        agents_str = ", ".join(p.agents) if p.agents else "none"
+        typer.echo(
+            f"  {name:16} arch={p.arch} outputs={p.outputs_dir}/ "
+            f"scripts={p.scripts_dir}/ prompts={p.prompts_file} agents=[{agents_str}]"
+        )
+
+
+@app.command("config-init")
+def config_init(
+    force: bool = typer.Option(
+        False, "--force", help="Overwrite existing files in ~/.config/projboot/"
+    ),
+) -> None:
+    """Materialize starter presets.toml, skills/, and remember/ in ~/.config/projboot/."""
+    target_dir = get_config_dir()
+    written = init_config_dir(target_dir, force=force)
+    typer.echo(f"Initialized {len(written)} file(s) in {target_dir}/")
+
+
+@app.command()
+def create(
+    name: str = typer.Argument(..., help="Project/repository name"),
+    lang: str = typer.Option(
+        "python",
+        "--lang",
+        "-l",
+        help="Language/base template (python, python-microservice, typescript, rails, helm-chart, none)",
+    ),
+    agent: list[str] = typer.Option(
+        [],
+        "--agent",
+        "-a",
+        help=f"AI assistant overlay (repeatable): {', '.join(SUPPORTED_AGENTS)}",
+    ),
+    preset: str = typer.Option(
+        "default",
+        "--preset",
+        "-p",
+        help="Workflow preset name (see list-presets)",
+    ),
+    arch: str | None = typer.Option(
+        None, "--arch", help="Override architecture style in agent instructions"
+    ),
+    outputs_dir: str | None = typer.Option(
+        None, "--outputs-dir", help="Override directory for generated outputs"
+    ),
+    scripts_dir: str | None = typer.Option(
+        None, "--scripts-dir", help="Override directory for helper scripts"
+    ),
+    prompts_file: str | None = typer.Option(
+        None, "--prompts-file", help="Override ordered prompts catalog file path"
+    ),
+    remote: str | None = typer.Option(
+        None, "--remote", "-r", help="Remote provider (e.g. 'github')"
+    ),
+    create_remote: bool = typer.Option(
+        False, "--create", help="Create the repository on the remote provider"
+    ),
+    clone: bool = typer.Option(
+        False, "--clone", help="Keep local working directory initialized alongside remote creation"
+    ),
+    description: str = typer.Option("", help="Short project description"),
+    private: bool = typer.Option(True, help="Make the remote repository private"),
+    org: str | None = typer.Option(None, help="GitHub organization"),
+    license: str = typer.Option("none", help="License: mit/apache2/gpl3/none"),
+    holder: str = typer.Option("", help="Copyright holder for the license"),
+    variable: list[str] = typer.Option(
+        [], "--var", "-V", help="Extra template variable as key=value (repeatable)"
+    ),
+    no_git: bool = typer.Option(
+        False, "--no-git", help="Skip running `git init` locally"
+    ),
+    no_graphify: bool = typer.Option(
+        False, "--no-graphify", help="Skip running `graphify update .` locally"
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="Overwrite a non-empty local target directory"
+    ),
+) -> None:
+    """Create an AI-agent-enabled project with universal harness, presets, and assistant overlays."""
+    if remote is not None and remote.lower() not in ("github", "gh"):
+        raise typer.BadParameter(f"Unsupported remote {remote!r}. Supported: github")
+
+    try:
+        resolved_preset = resolve_preset(
+            preset,
+            arch=arch,
+            outputs_dir=outputs_dir,
+            scripts_dir=scripts_dir,
+            prompts_file=prompts_file,
+            agents=agent,
+        )
+        files = compose_project_files(
+            name=name,
+            description=description,
+            lang=lang,
+            preset=resolved_preset,
+            license=license,
+            holder=holder,
+            extra_vars=_parse_vars(variable),
+        )
+    except KeyError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    target = Path(name)
+    _write_local(target, files, force)
+
+    for msg in run_post_hooks(
+        target, init_git=not no_git, run_graphify=not no_graphify
+    ):
+        typer.echo(f"  * {msg}")
+
+    if create_remote or (remote and remote.lower() in ("github", "gh")):
+        _push_github(
+            files,
+            name=name,
+            description=description,
+            private=private,
+            org=org,
+        )
+    elif clone:
+        typer.echo(f"Local project ready at {target}/")
 
 
 @app.command()

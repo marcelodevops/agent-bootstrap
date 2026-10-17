@@ -1,72 +1,117 @@
-# project-bootstrapper
+# project-bootstrapper (`projboot`)
 
-Scaffold projects from curated templates or a dirtree layout — to GitHub, or to
-your local disk for fast iteration and offline testing.
+Scaffold AI-agent-ready projects from curated language templates, customizable workflow presets, or a `tree`-style layout — locally first, with one-command GitHub repository creation.
 
 ## Install
 
 ```bash
-pip install -e .            # installs the `project-bootstrapper` command
+pip install -e .            # installs both `projboot` and `project-bootstrapper`
 pip install -e ".[dev]"     # + pytest for the test suite
 ```
 
-Requires Python 3.11+. The GitHub path needs `GITHUB_TOKEN` exported; the
-`--local` path needs no token and no network.
+Requires Python 3.11+. Local scaffolding needs no token and no network; GitHub remote creation (`-r github --create`) uses `GITHUB_TOKEN`.
 
-## Templates
+---
+
+## Quickstart: AI Agent Project Bootstrapping (`projboot create`)
+
+Create a new Python project pre-wired for **Claude Code** and **GitHub Copilot**, scaffolded locally and pushed to a new GitHub repository:
 
 ```bash
-project-bootstrapper list-templates
+projboot create new-project -l python -a claude -a gh-copilot -r github --create --clone
 ```
 
-| Template | What you get |
-|---|---|
-| `python-microservice` | src layout, Dockerfile, PyPI `pyproject.toml`, GitHub CI |
-| `helm-chart` | `Chart.yaml`, `values.yaml`, deployment/service templates, `helm lint` CI |
-| `typescript` | `package.json`, `tsconfig`, multi-stage Dockerfile |
-| `rails` | minimal Rails-style skeleton (base layout, not full `rails new` output) |
-
-## Usage
-
-Create a repo and scaffold it on GitHub:
+Or scaffold locally with custom directories for generated outputs, helper scripts, an ordered prompts catalog, and architecture conventions (all automatically wired into `AGENTS.md`, `CLAUDE.md`, `.github/copilot-instructions.md`, etc.):
 
 ```bash
-project-bootstrapper init --name my-svc --template python-microservice \
-  --description "My service" --license mit --holder "Your Name"
+projboot create new-project \
+  -l python \
+  -a claude -a gh-copilot -a codeassistant \
+  --arch hexagonal \
+  --outputs-dir artifacts/out \
+  --scripts-dir hack \
+  --prompts-file docs/PROMPTS.md
 ```
 
-Scaffold to the local disk instead (no token needed) — great for trying a
-template before pushing:
+### What `projboot create` Generates
+
+1. **Base Language Stack (`-l / --lang`)**:
+   - `python` / `python-microservice`: `src/` layout, `pyproject.toml`, `Dockerfile`, GitHub CI
+   - `typescript`: `package.json`, `tsconfig.json`, `src/index.ts`, multi-stage `Dockerfile`
+   - `helm-chart`: `Chart.yaml`, `values.yaml`, `templates/`, `helm lint` CI
+   - `rails`: Minimal Rails skeleton
+   - `none`: Minimal agent-only repo (`README.md` + `.gitignore`)
+2. **Universal Agent Harness (Always Included)**:
+   - `AGENTS.md`: Project overview, `$arch` rules, directory map (`$outputs_dir/`, `$scripts_dir/`, `$prompts_file`), and `graphify` instructions
+   - `graphify-out/`: Knowledge graph folder (automatically updated via `graphify update .` if `graphify` is installed)
+   - `.remember/`: Persistent agent memory (`MEMORY.md` & `decisions.md`, or copied from `~/.config/projboot/remember/`)
+   - `.agents/skills/`: Reusable project skills (copied from `~/.config/projboot/skills/` or starter `project-conventions/SKILL.md`)
+   - `$prompts_file` (default `PROMPTS.md`): Ordered prompt catalog
+   - `$outputs_dir/` & `$scripts_dir/` directories
+3. **Assistant Overlays (`-a / --agent`, repeatable)**:
+   - `-a claude`: `CLAUDE.md` + `.claude/settings.json`
+   - `-a gh-copilot`: `.github/copilot-instructions.md` + `.github/prompts/bootstrap.prompt.md`
+   - `-a codeassistant`: `.codeassistant/instructions.md`
+   - `-a cursor`: `.cursor/rules/project.mdc`
+
+---
+
+## Presets & Personal User Store (`~/.config/projboot/`)
+
+Initialize your personal `projboot` configuration directory (or set `PROJBOOT_HOME` to customize its path):
 
 ```bash
-project-bootstrapper init --name demo --template helm-chart --local
+projboot config-init
+projboot list-presets
+```
+
+This creates:
+- `~/.config/projboot/presets.toml` — Define named presets (`default`, `clean-arch`, or your own) with default `arch`, `outputs_dir`, `scripts_dir`, `prompts_file`, and `agents`.
+- `~/.config/projboot/skills/` — Any skill files placed here are automatically copied into `.agents/skills/` and rendered with your project's `$name`, `$arch`, `$outputs_dir`, `$scripts_dir`, and `$prompts_file` variables.
+- `~/.config/projboot/remember/` — Starter memory templates copied into `.remember/` on every new project.
+
+Use a named preset with `-p / --preset`:
+
+```bash
+projboot create my-service -l python -p clean-arch
+```
+
+---
+
+## Classic Template & Dirtree Commands
+
+List available base templates:
+
+```bash
+projboot list-templates
+```
+
+Scaffold directly from a base template (without the AI agent harness):
+
+```bash
+projboot init --name my-svc --template python-microservice \
+  --description "My service" --license mit --holder "Your Name" --local
 ```
 
 Override or add template variables with `--var` (repeatable):
 
 ```bash
-project-bootstrapper init --name demo --template typescript \
-  --var name=real-package-name --local
+projboot init --name demo --template typescript --var name=real-package-name --local
 ```
 
-Build a layout from a `tree`-style file — directories become paths, leaf files
-are materialized empty (git tracks directories implicitly via their files):
+Build a layout from a `tree`-style file — directories become paths, leaf files are materialized empty:
 
 ```bash
-project-bootstrapper init-from-tree --name myproject --tree-file examples/tree.txt \
-  --gitkeep --local
+projboot init-from-tree --name myproject --tree-file examples/tree.txt --gitkeep --local
 ```
 
-`--gitkeep` drops a `.gitkeep` in empty directories so they survive; `--force`
-allows overwriting a non-empty `--local` target.
+`--gitkeep` drops a `.gitkeep` in empty directories so they survive; `--force` allows overwriting a non-empty local target directory.
 
-## How templating works
+---
 
-Templates render with Python's `string.Template` (`$name`, `$description`,
-`$year`, `$holder`, plus any `--var`). This is deliberate: Helm's Go-template
-syntax (`{{ .Values.foo }}`) and GitHub Actions expressions (`${{ secrets.X }}`)
-contain no bare `$identifier`, so they pass through untouched. `str.format()` or
-Jinja2 would corrupt them.
+## How Templating Works
+
+Templates render with Python's `string.Template` (`$name`, `$description`, `$year`, `$holder`, `$arch`, `$outputs_dir`, `$scripts_dir`, `$prompts_file`, plus any `--var`). This is deliberate: Helm's Go-template syntax (`{{ .Values.foo }}`) and GitHub Actions expressions (`${{ secrets.X }}`) contain no bare `$identifier`, so they pass through untouched. `str.format()` or Jinja2 would corrupt them.
 
 ## Tests
 
@@ -74,5 +119,4 @@ Jinja2 would corrupt them.
 pytest -q
 ```
 
-The dirtree parser, template rendering, the CLI (local + GitHub dispatch, via
-mocks), and the GitHub helper are all covered without any network access.
+The dirtree parser, template rendering, preset & user store loader, AI agent overlays, CLI (local + GitHub dispatch via mocks), and GitHub helper are all covered without any network access.
