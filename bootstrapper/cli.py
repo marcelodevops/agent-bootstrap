@@ -93,14 +93,29 @@ def _push_github(
     description: str,
     private: bool,
     org: str | None,
+    force: bool,
 ) -> None:
     """Create a GitHub repository and upload all scaffolded files."""
     # Imported lazily so --local and tests never require PyGithub/network.
-    from .github_utils import add_file, create_repo, get_github, get_owner
+    from .github_utils import (
+        RepoExistsError,
+        add_file,
+        create_repo,
+        get_github,
+        get_owner,
+    )
 
     gh = get_github()
     owner = get_owner(gh, org)
-    repo = create_repo(owner, name, description, private)
+    try:
+        repo = create_repo(owner, name, description, private, force=force)
+    except RepoExistsError as exc:
+        typer.echo(
+            f"Repo {exc.full_name} already exists; refusing to overwrite its files "
+            "(pass --force to update them).",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
     typer.echo(f"Repo ready: {repo.clone_url}")
     for path, content in files.items():
         add_file(repo, path, content, f"Add {path}")
@@ -128,6 +143,7 @@ def _emit(
         description=description,
         private=private,
         org=org,
+        force=force,
     )
 
 
@@ -304,6 +320,7 @@ def create(
             description=description,
             private=private,
             org=org,
+            force=force,
         )
     elif clone:
         typer.echo(f"Local project ready at {target}/")

@@ -108,7 +108,7 @@ def test_init_dispatches_to_github(tmp_path, monkeypatch):
 
     monkeypatch.setattr(gu, "get_github", lambda: MagicMock())
     monkeypatch.setattr(gu, "get_owner", lambda gh, org: MagicMock())
-    monkeypatch.setattr(gu, "create_repo", lambda owner, n, d, p: fake_repo)
+    monkeypatch.setattr(gu, "create_repo", lambda owner, n, d, p, force=False: fake_repo)
     monkeypatch.setattr(
         gu, "add_file", lambda repo, path, content, message: calls.append((path, content))
     )
@@ -171,7 +171,7 @@ def test_create_ai_project_with_github_remote(tmp_path, monkeypatch):
 
     monkeypatch.setattr(gu, "get_github", lambda: MagicMock())
     monkeypatch.setattr(gu, "get_owner", lambda gh, org: MagicMock())
-    monkeypatch.setattr(gu, "create_repo", lambda owner, n, d, p: fake_repo)
+    monkeypatch.setattr(gu, "create_repo", lambda owner, n, d, p, force=False: fake_repo)
     monkeypatch.setattr(
         gu, "add_file", lambda repo, path, content, message: calls.append((path, content))
     )
@@ -229,6 +229,26 @@ def test_write_local_no_partial_on_escape(tmp_path):
         _write_local(tmp_path / "out", files, force=False)
     # First file must NOT have been written because validation runs up front.
     assert not (tmp_path / "out" / "ok.txt").exists()
+
+
+def test_push_refuses_existing_repo_without_force(tmp_path, monkeypatch):
+    import bootstrapper.github_utils as gu
+    from bootstrapper.github_utils import RepoExistsError
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(gu, "get_github", lambda: MagicMock())
+    monkeypatch.setattr(gu, "get_owner", lambda gh, org: MagicMock())
+
+    def _raise(owner, n, d, p, force=False):
+        raise RepoExistsError("acme/demo")
+
+    monkeypatch.setattr(gu, "create_repo", _raise)
+    pushed: list[str] = []
+    monkeypatch.setattr(gu, "add_file", lambda *a, **k: pushed.append("x"))
+
+    res = _run(["init", "--template", "typescript", "--name", "demo"])
+    assert res.exit_code != 0
+    assert pushed == []  # nothing uploaded against an existing repo
 
 
 def test_config_init_and_list_presets(tmp_path, monkeypatch):
