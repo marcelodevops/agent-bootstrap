@@ -1,0 +1,12 @@
+myproject/
+├── charts/
+│   └── api/
+│       ├── Chart.yaml
+│       └── values.yaml
+├── src/
+│   ├── index.ts
+│   └── lib/
+│       └── util.ts
+├── docs/
+├── test/
+└── README.md
