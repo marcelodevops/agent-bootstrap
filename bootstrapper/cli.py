@@ -73,8 +73,14 @@ def _write_local(target: Path, files: dict[str, str], force: bool) -> None:
     if target.exists() and any(target.iterdir()) and not force:
         typer.echo(f"Refusing to overwrite non-empty dir {target}/ (use --force)", err=True)
         raise typer.Exit(code=1)
-    for rel, content in files.items():
-        path = _safe_join(target, rel)
+    # Validate every path first so an escaping/empty path aborts before any
+    # file is written, instead of leaving a half-generated project behind.
+    try:
+        planned = [(content, _safe_join(target, rel)) for rel, content in files.items()]
+    except ValueError as exc:
+        typer.echo(f"Invalid output path: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    for content, path in planned:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content)
     typer.echo(f"Scaffolded {len(files)} file(s) into {target}/")
@@ -87,19 +93,38 @@ def _push_github(
     description: str,
     private: bool,
     org: str | None,
-) -> None:
-    """Create a GitHub repository and upload all scaffolded files."""
+    force: bool,
+) -> str:
+    """Create a GitHub repository and upload all scaffolded files.
+
+    Returns the repo's clone URL so callers can wire a local checkout.
+    """
     # Imported lazily so --local and tests never require PyGithub/network.
-    from .github_utils import add_file, create_repo, get_github, get_owner
+    from .github_utils import (
+        RepoExistsError,
+        add_file,
+        create_repo,
+        get_github,
+        get_owner,
+    )
 
     gh = get_github()
     owner = get_owner(gh, org)
-    repo = create_repo(owner, name, description, private)
+    try:
+        repo = create_repo(owner, name, description, private, force=force)
+    except RepoExistsError as exc:
+        typer.echo(
+            f"Repo {exc.full_name} already exists; refusing to overwrite its files "
+            "(pass --force to update them).",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
     typer.echo(f"Repo ready: {repo.clone_url}")
     for path, content in files.items():
         add_file(repo, path, content, f"Add {path}")
         typer.echo(f"  + {path}")
     typer.echo("Done.")
+    return repo.clone_url
 
 
 def _emit(
@@ -122,6 +147,7 @@ def _emit(
         description=description,
         private=private,
         org=org,
+        force=force,
     )
 
 
@@ -280,25 +306,50 @@ def create(
         )
     except KeyError as exc:
         raise typer.BadParameter(str(exc)) from exc
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
 
     target = Path(name)
     _write_local(target, files, force)
 
-    for msg in run_post_hooks(
-        target, init_git=not no_git, run_graphify=not no_graphify
-    ):
-        typer.echo(f"  * {msg}")
-
-    if create_remote or (remote and remote.lower() in ("github", "gh")):
-        _push_github(
+    # Upload only when --create is given; --remote just names the provider
+    # (defaulting to github), so the two flags no longer overlap silently.
+    clone_url: str | None = None
+    if create_remote:
+        if remote is None:
+            typer.echo("No --remote provider given; defaulting to github.")
+        clone_url = _push_github(
             files,
             name=name,
             description=description,
             private=private,
             org=org,
+            force=force,
         )
-    elif clone:
-        typer.echo(f"Local project ready at {target}/")
+    elif remote:
+        typer.echo(f"Remote '{remote}' selected but --create not given; not uploading.")
+
+    # --clone should leave a checkout connected to the remote: configure origin
+    # and make an initial commit. This needs git, so it's skipped under --no-git.
+    connect_url = clone_url if clone else None
+    if clone and no_git:
+        typer.echo("Note: --clone needs git but --no-git was set; repo not connected.")
+        connect_url = None
+
+    for msg in run_post_hooks(
+        target,
+        init_git=not no_git,
+        run_graphify=not no_graphify,
+        connect_remote_url=connect_url,
+        make_commit=bool(connect_url),
+    ):
+        typer.echo(f"  * {msg}")
+
+    if connect_url:
+        typer.echo(
+            "Local repo has origin + an initial commit; files were uploaded via the "
+            "API, so `git fetch` and reconcile before `git push`."
+        )
 
 
 @app.command()

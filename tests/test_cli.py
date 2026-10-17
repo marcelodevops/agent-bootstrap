@@ -2,6 +2,8 @@ import textwrap
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+import typer
 from typer.testing import CliRunner
 
 from bootstrapper.cli import app
@@ -106,7 +108,7 @@ def test_init_dispatches_to_github(tmp_path, monkeypatch):
 
     monkeypatch.setattr(gu, "get_github", lambda: MagicMock())
     monkeypatch.setattr(gu, "get_owner", lambda gh, org: MagicMock())
-    monkeypatch.setattr(gu, "create_repo", lambda owner, n, d, p: fake_repo)
+    monkeypatch.setattr(gu, "create_repo", lambda owner, n, d, p, force=False: fake_repo)
     monkeypatch.setattr(
         gu, "add_file", lambda repo, path, content, message: calls.append((path, content))
     )
@@ -169,7 +171,7 @@ def test_create_ai_project_with_github_remote(tmp_path, monkeypatch):
 
     monkeypatch.setattr(gu, "get_github", lambda: MagicMock())
     monkeypatch.setattr(gu, "get_owner", lambda gh, org: MagicMock())
-    monkeypatch.setattr(gu, "create_repo", lambda owner, n, d, p: fake_repo)
+    monkeypatch.setattr(gu, "create_repo", lambda owner, n, d, p, force=False: fake_repo)
     monkeypatch.setattr(
         gu, "add_file", lambda repo, path, content, message: calls.append((path, content))
     )
@@ -199,6 +201,90 @@ def test_create_ai_project_with_github_remote(tmp_path, monkeypatch):
     assert "AGENTS.md" in pushed
     assert "CLAUDE.md" in pushed
     assert ".github/copilot-instructions.md" in pushed
+
+
+def test_create_rejects_escaping_outputs_dir(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PROJBOOT_HOME", str(tmp_path / "home"))
+    res = _run(["create", "proj", "-l", "none", "--outputs-dir", "../escape", "--no-git"])
+    assert res.exit_code != 0
+    # Validation happens before any write, so the project dir is never created.
+    assert not (tmp_path / "proj").exists()
+
+
+def test_create_rejects_colliding_prompts_file(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PROJBOOT_HOME", str(tmp_path / "home"))
+    res = _run(
+        ["create", "proj", "-l", "python", "--prompts-file", "src/main.py", "--no-git"]
+    )
+    assert res.exit_code != 0
+
+
+def test_write_local_no_partial_on_escape(tmp_path):
+    from bootstrapper.cli import _write_local
+
+    files = {"ok.txt": "data", "../escape.txt": "bad"}
+    with pytest.raises(typer.Exit):
+        _write_local(tmp_path / "out", files, force=False)
+    # First file must NOT have been written because validation runs up front.
+    assert not (tmp_path / "out" / "ok.txt").exists()
+
+
+def test_clone_produces_connected_local_repo(tmp_path, monkeypatch):
+    # Real git (no network): --clone --create should leave origin + a commit.
+    import subprocess
+
+    import bootstrapper.github_utils as gu
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PROJBOOT_HOME", str(tmp_path / "home"))
+    fake_repo = MagicMock()
+    fake_repo.clone_url = "https://github.com/acme/clonetest.git"
+    monkeypatch.setattr(gu, "get_github", lambda: MagicMock())
+    monkeypatch.setattr(gu, "get_owner", lambda gh, org: MagicMock())
+    monkeypatch.setattr(gu, "create_repo", lambda owner, n, d, p, force=False: fake_repo)
+    monkeypatch.setattr(gu, "add_file", lambda *a, **k: None)
+
+    res = _run(
+        ["create", "clonetest", "-l", "none", "--agent", "claude",
+         "--create", "-r", "github", "--clone", "--no-graphify"]
+    )
+    assert res.exit_code == 0, res.stdout
+
+    proj = tmp_path / "clonetest"
+    remote = subprocess.run(
+        ["git", "-C", str(proj), "remote", "get-url", "origin"],
+        capture_output=True, text=True,
+    )
+    assert remote.returncode == 0
+    assert remote.stdout.strip() == fake_repo.clone_url
+
+    commits = subprocess.run(
+        ["git", "-C", str(proj), "rev-list", "--count", "HEAD"],
+        capture_output=True, text=True,
+    )
+    assert commits.stdout.strip() == "1"  # initial commit exists
+
+
+def test_push_refuses_existing_repo_without_force(tmp_path, monkeypatch):
+    import bootstrapper.github_utils as gu
+    from bootstrapper.github_utils import RepoExistsError
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(gu, "get_github", lambda: MagicMock())
+    monkeypatch.setattr(gu, "get_owner", lambda gh, org: MagicMock())
+
+    def _raise(owner, n, d, p, force=False):
+        raise RepoExistsError("acme/demo")
+
+    monkeypatch.setattr(gu, "create_repo", _raise)
+    pushed: list[str] = []
+    monkeypatch.setattr(gu, "add_file", lambda *a, **k: pushed.append("x"))
+
+    res = _run(["init", "--template", "typescript", "--name", "demo"])
+    assert res.exit_code != 0
+    assert pushed == []  # nothing uploaded against an existing repo
 
 
 def test_config_init_and_list_presets(tmp_path, monkeypatch):

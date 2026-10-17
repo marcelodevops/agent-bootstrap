@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import tomllib
 
 
@@ -91,6 +91,27 @@ DEFAULT_SKILL_FILES: dict[str, str] = {
 }
 
 
+def validate_rel_path(value: str, field: str) -> str:
+    """Ensure a preset path is a safe, repo-relative POSIX path.
+
+    Rejects absolute paths, ``~`` home expansion, and any ``..`` traversal so a
+    custom --outputs-dir/--scripts-dir/--prompts-file cannot escape the project
+    root or overwrite files outside it.
+    """
+    raw = value.strip()
+    if not raw:
+        raise ValueError(f"{field} must not be empty")
+    if "\x00" in raw:
+        raise ValueError(f"{field} contains a null byte")
+    norm = raw.replace("\\", "/")
+    if norm.startswith("/") or norm.startswith("~"):
+        raise ValueError(f"{field} must be relative to the project root: {value!r}")
+    parts = PurePosixPath(norm).parts
+    if ".." in parts:
+        raise ValueError(f"{field} must not contain '..': {value!r}")
+    return norm
+
+
 def get_config_dir() -> Path:
     env_dir = os.environ.get("PROJBOOT_HOME")
     if env_dir:
@@ -150,9 +171,18 @@ def resolve_preset(
     return PresetConfig(
         name=base.name,
         arch=arch if arch is not None else base.arch,
-        outputs_dir=(outputs_dir if outputs_dir is not None else base.outputs_dir).rstrip("/"),
-        scripts_dir=(scripts_dir if scripts_dir is not None else base.scripts_dir).rstrip("/"),
-        prompts_file=prompts_file if prompts_file is not None else base.prompts_file,
+        outputs_dir=validate_rel_path(
+            (outputs_dir if outputs_dir is not None else base.outputs_dir).rstrip("/"),
+            "--outputs-dir",
+        ),
+        scripts_dir=validate_rel_path(
+            (scripts_dir if scripts_dir is not None else base.scripts_dir).rstrip("/"),
+            "--scripts-dir",
+        ),
+        prompts_file=validate_rel_path(
+            prompts_file if prompts_file is not None else base.prompts_file,
+            "--prompts-file",
+        ),
         agents=merged_agents,
     )
 

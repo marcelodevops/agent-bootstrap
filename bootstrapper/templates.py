@@ -39,11 +39,15 @@ TEMPLATES: dict[str, dict] = {
                 'if __name__ == "__main__":\n'
                 "    main()\n"
             ),
+            "requirements.txt": (
+                "# Runtime dependencies, one per line (pip install -r requirements.txt).\n"
+            ),
             "Dockerfile": (
                 "FROM python:3.11-slim\n"
                 "WORKDIR /app\n"
+                "COPY requirements.txt ./\n"
+                "RUN pip install --no-cache-dir -r requirements.txt\n"
                 "COPY . .\n"
-                "RUN pip install -r requirements.txt || true\n"
                 'CMD ["python", "src/main.py"]\n'
             ),
             ".github/workflows/ci.yml": (
@@ -75,6 +79,8 @@ TEMPLATES: dict[str, dict] = {
             ),
             "values.yaml": (
                 "replicaCount: 1\n"
+                "nameOverride: \"\"\n"
+                "fullnameOverride: \"\"\n"
                 "image:\n"
                 "  repository: ghcr.io/example/$name\n"
                 "  tag: \"\"\n"
@@ -84,6 +90,33 @@ TEMPLATES: dict[str, dict] = {
                 "  port: 80\n"
             ),
             ".helmignore": "logs/\n*.tfvars\n",
+            "templates/_helpers.tpl": (
+                '{{- define "$name.chart" -}}\n'
+                '{{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}\n'
+                "{{- end }}\n\n"
+                '{{- define "$name.name" -}}\n'
+                "{{ default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix \"-\" }}\n"
+                "{{- end }}\n\n"
+                '{{- define "$name.fullname" -}}\n'
+                "{{- if .Values.fullnameOverride }}\n"
+                '{{ .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}\n'
+                "{{- else }}\n"
+                '{{ printf "%s" .Chart.Name | trunc 63 | trimSuffix "-" }}\n'
+                "{{- end }}\n"
+                "{{- end }}\n\n"
+                '{{- define "$name.selectorLabels" -}}\n'
+                "app.kubernetes.io/name: {{ include \"$name.name\" . }}\n"
+                "app.kubernetes.io/instance: {{ .Release.Name }}\n"
+                "{{- end }}\n\n"
+                '{{- define "$name.labels" -}}\n'
+                "helm.sh/chart: {{ include \"$name.chart\" . }}\n"
+                "{{ include \"$name.selectorLabels\" . }}\n"
+                "{{- if .Chart.AppVersion }}\n"
+                "app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}\n"
+                "{{- end }}\n"
+                "app.kubernetes.io/managed-by: {{ .Release.Service }}\n"
+                "{{- end }}\n"
+            ),
             "templates/deployment.yaml": (
                 "apiVersion: apps/v1\n"
                 "kind: Deployment\n"
@@ -173,6 +206,10 @@ TEMPLATES: dict[str, dict] = {
                 "  \"scripts\": {\n"
                 "    \"build\": \"tsc\",\n"
                 "    \"start\": \"node dist/index.js\"\n"
+                "  },\n"
+                "  \"devDependencies\": {\n"
+                "    \"typescript\": \"^5.4.0\",\n"
+                "    \"@types/node\": \"^20.11.0\"\n"
                 "  }\n"
                 "}\n"
             ),
@@ -197,14 +234,14 @@ TEMPLATES: dict[str, dict] = {
                 "FROM node:20-alpine AS build\n"
                 "WORKDIR /app\n"
                 "COPY package*.json ./\n"
-                "RUN npm ci\n"
+                "RUN npm install\n"
                 "COPY . .\n"
                 "RUN npm run build\n\n"
                 "FROM node:20-alpine\n"
                 "WORKDIR /app\n"
                 "COPY --from=build /app/dist ./dist\n"
                 "COPY --from=build /app/package*.json ./\n"
-                "RUN npm ci --omit=dev\n"
+                "RUN npm install --omit=dev\n"
                 'CMD ["node", "dist/index.js"]\n'
             ),
         },
@@ -227,27 +264,46 @@ LICENSES: dict[str, str] = {
     "mit": (
         "MIT License\n\n"
         "Copyright (c) $year $holder\n\n"
-        "Permission is hereby granted, free of charge, to any person obtaining a copy "
-        "of this software and associated documentation files (the \"Software\"), to deal "
-        "in the Software without restriction, including without limitation the rights to "
-        "use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of "
-        "the Software, and to permit persons to whom the Software is furnished to do so, "
-        "subject to the following conditions:\n\n"
-        "The above copyright notice and this permission notice shall be included in all "
+        "Permission is hereby granted, free of charge, to any person obtaining a copy\n"
+        "of this software and associated documentation files (the \"Software\"), to deal\n"
+        "in the Software without restriction, including without limitation the rights\n"
+        "to use, copy, modify, merge, publish, distribute, sublicense, and/or sell\n"
+        "copies of the Software, and to permit persons to whom the Software is\n"
+        "furnished to do so, subject to the following conditions:\n\n"
+        "The above copyright notice and this permission notice shall be included in all\n"
         "copies or substantial portions of the Software.\n\n"
-        "THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND.\n"
+        "THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\n"
+        "IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\n"
+        "FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\n"
+        "AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\n"
+        "LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\n"
+        "OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\n"
+        "SOFTWARE.\n"
     ),
     "apache2": (
-        "                                 Apache License\n"
-        "                           Version 2.0, January 2004\n\n"
-        "   Copyright $year $holder\n\n"
-        "   Licensed under the Apache License, Version 2.0 (the \"License\"); "
+        "Copyright $year $holder\n\n"
+        "Licensed under the Apache License, Version 2.0 (the \"License\");\n"
         "you may not use this file except in compliance with the License.\n"
+        "You may obtain a copy of the License at\n\n"
+        "    http://www.apache.org/licenses/LICENSE-2.0\n\n"
+        "Unless required by applicable law or agreed to in writing, software\n"
+        "distributed under the License is distributed on an \"AS IS\" BASIS,\n"
+        "WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n"
+        "See the License for the specific language governing permissions and\n"
+        "limitations under the License.\n"
     ),
     "gpl3": (
-        "                    GNU GENERAL PUBLIC LICENSE\n"
-        "                       Version 3, 29 June 2007\n\n"
-        "   Copyright (C) $year $holder\n"
+        "Copyright (C) $year $holder\n\n"
+        "This program is free software: you can redistribute it and/or modify\n"
+        "it under the terms of the GNU General Public License as published by\n"
+        "the Free Software Foundation, either version 3 of the License, or\n"
+        "(at your option) any later version.\n\n"
+        "This program is distributed in the hope that it will be useful,\n"
+        "but WITHOUT ANY WARRANTY; without even the implied warranty of\n"
+        "MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the\n"
+        "GNU General Public License for more details.\n\n"
+        "You should have received a copy of the GNU General Public License\n"
+        "along with this program.  If not, see <https://www.gnu.org/licenses/>.\n"
     ),
 }
 

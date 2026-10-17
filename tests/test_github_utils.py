@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 import pytest
 from github.GithubException import GithubException
 
-from bootstrapper.github_utils import add_file, create_repo
+from bootstrapper.github_utils import RepoExistsError, add_file, create_repo
 
 
 def _unprocessible():
@@ -41,11 +41,21 @@ def test_add_file_reraises_non_422():
         add_file(repo, "x", "y")
 
 
-def test_create_repo_returns_existing():
+def test_create_repo_refuses_existing_without_force():
+    owner = MagicMock()
+    existing = MagicMock()
+    existing.full_name = "acme/n"
+    owner.get_repo.return_value = existing
+    with pytest.raises(RepoExistsError):
+        create_repo(owner, "n", "d", True)
+    owner.create_repo.assert_not_called()
+
+
+def test_create_repo_returns_existing_with_force():
     owner = MagicMock()
     existing = MagicMock()
     owner.get_repo.return_value = existing
-    assert create_repo(owner, "n", "d", True) is existing
+    assert create_repo(owner, "n", "d", True, force=True) is existing
     owner.create_repo.assert_not_called()
 
 

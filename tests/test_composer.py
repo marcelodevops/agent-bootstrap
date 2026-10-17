@@ -1,7 +1,26 @@
 from unittest.mock import patch
 
-from bootstrapper.composer import compose_project_files, run_post_hooks
+import pytest
+
+from bootstrapper.composer import (
+    PathCollisionError,
+    compose_project_files,
+    run_post_hooks,
+)
 from bootstrapper.presets import resolve_preset
+
+
+def test_compose_rejects_prompts_file_colliding_with_template(tmp_path):
+    # --prompts-file src/main.py would silently clobber the python entrypoint.
+    preset = resolve_preset("default", prompts_file="src/main.py", agents=[])
+    with pytest.raises(PathCollisionError, match="src/main.py"):
+        compose_project_files(
+            name="p",
+            description="d",
+            lang="python",
+            preset=preset,
+            config_dir=tmp_path,
+        )
 
 
 def test_compose_python_with_claude_and_copilot(tmp_path):
@@ -61,3 +80,44 @@ def test_run_post_hooks_invokes_git_and_graphify(tmp_path):
     assert ["git", "init", "-b", "main"] in calls
     assert ["/usr/local/bin/graphify", "update", "."] in calls
     assert len(messages) == 2
+
+
+def test_run_post_hooks_connects_remote_and_commits(tmp_path):
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, cwd, check, capture_output, text):
+        calls.append(cmd)
+
+    with patch("bootstrapper.composer.subprocess.run", side_effect=fake_run):
+        messages = run_post_hooks(
+            tmp_path,
+            init_git=True,
+            run_graphify=False,
+            connect_remote_url="https://github.com/acme/demo.git",
+            make_commit=True,
+        )
+
+    assert ["git", "remote", "add", "origin", "https://github.com/acme/demo.git"] in calls
+    assert ["git", "add", "-A"] in calls
+    assert any(c[:1] == ["git"] and "commit" in c for c in calls)
+    assert any("origin" in m for m in messages)
+    assert "Created initial commit" in messages
+
+
+def test_run_post_hooks_skips_remote_when_no_git(tmp_path):
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, cwd, check, capture_output, text):
+        calls.append(cmd)
+
+    with patch("bootstrapper.composer.subprocess.run", side_effect=fake_run):
+        # init_git=False must not run ANY git command (no init, remote, commit).
+        run_post_hooks(
+            tmp_path,
+            init_git=False,
+            run_graphify=False,
+            connect_remote_url="https://x/y.git",
+            make_commit=True,
+        )
+
+    assert calls == []
