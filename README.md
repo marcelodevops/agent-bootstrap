@@ -1,5 +1,8 @@
 # agent-bootstrap (`projboot`)
 
+[![PyPI](https://img.shields.io/pypi/v/agent-bootstrap)](https://pypi.org/project/agent-bootstrap/)
+[![Python](https://img.shields.io/pypi/pyversions/agent-bootstrap)](https://pypi.org/project/agent-bootstrap/)
+
 Scaffold AI-agent-ready projects from curated language templates, customizable workflow presets, or a `tree`-style layout — locally first, with one-command GitHub repository creation.
 
 ## Install
