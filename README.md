@@ -7,9 +7,16 @@ Scaffold AI-agent-ready projects from curated language templates, customizable w
 
 ## Install
 
+Install globally as an isolated CLI tool with `uv` (recommended) or `pipx`, or via `pip`:
+
 ```bash
+uv tool install agent-bootstrap      # installs `projboot` and `agent-bootstrap` globally
+# or from a local checkout:
+uv tool install --force -e .
+
+# or via pip:
 pip install agent-bootstrap          # installs both `projboot` and `agent-bootstrap`
-pip install -e ".[dev]"              # dev: + pytest for the test suite
+pip install -e ".[dev]"              # dev: + pytest & build
 ```
 
 Requires Python 3.11+. Local scaffolding needs no token and no network; GitHub remote creation (`-r github --create`) uses `GITHUB_TOKEN`.
@@ -18,23 +25,76 @@ Requires Python 3.11+. Local scaffolding needs no token and no network; GitHub r
 
 ## Quickstart: AI Agent Project Bootstrapping (`projboot create`)
 
-Create a new Python project pre-wired for **Claude Code** and **GitHub Copilot**, scaffolded locally and pushed to a new GitHub repository:
+### 1. Initialize your personal `~/.config/projboot/` presets & skills store
+```bash
+projboot config-init
+projboot list-presets
+```
 
+### 2. Create a local AI-agent Python project with Claude + GitHub Copilot + custom folders
+```bash
+projboot create demo-agent \
+  -l python \
+  -a claude -a gh-copilot \
+  --arch hexagonal \
+  --outputs-dir artifacts/out \
+  --scripts-dir hack \
+  --prompts-file PROMPTS.md
+```
+
+### 3. Create locally AND push to a new GitHub repo (requires `GITHUB_TOKEN`)
 ```bash
 projboot create new-project -l python -a claude -a gh-copilot -r github --create --clone
 ```
 
-Or scaffold locally with custom directories for generated outputs, helper scripts, an ordered prompts catalog, and architecture conventions (all automatically wired into `AGENTS.md`, `CLAUDE.md`, `.github/copilot-instructions.md`, etc.):
+### Example Generated Project Layout
 
-```bash
-projboot create new-project \
-  -l python \
-  -a claude -a gh-copilot -a codeassistant \
-  --arch hexagonal \
-  --outputs-dir artifacts/out \
-  --scripts-dir hack \
-  --prompts-file docs/PROMPTS.md
+```text
+demo-agent/
+├── AGENTS.md                                    # Universal instructions + Graphify rules + layout map
+├── CLAUDE.md                                    # Claude Code instructions (-a claude)
+├── PROMPTS.md                                   # Ordered prompts catalog (--prompts-file)
+├── .claude/
+│   └── settings.json                            # Claude Code project settings (-a claude)
+├── .github/
+│   ├── copilot-instructions.md                  # GitHub Copilot instructions (-a gh-copilot)
+│   ├── prompts/bootstrap.prompt.md              # Copilot reusable prompt (-a gh-copilot)
+│   └── workflows/ci.yml                         # Base language CI (-l python)
+├── .agents/
+│   └── skills/project-conventions/SKILL.md      # Project skills (from ~/.config/projboot/skills/)
+├── .remember/
+│   ├── MEMORY.md                                # Persistent agent memory
+│   └── decisions.md                             # Architectural decisions log
+├── graphify-out/                                # Knowledge graph (auto-updated via `graphify update .`)
+├── artifacts/out/                               # Custom outputs folder (--outputs-dir)
+├── hack/                                        # Custom scripts folder (--scripts-dir)
+├── pyproject.toml
+├── Dockerfile
+└── src/
+    └── main.py
 ```
+
+### `projboot create` Options
+
+| Flag | Default | Description |
+|---|---|---|
+| `<name>` | *(required)* | Target directory and repository name |
+| `-l`, `--lang` | `python` | Base template: `python`, `python-microservice`, `typescript`, `rails`, `helm-chart`, `none` |
+| `-a`, `--agent` | *(from preset)* | Repeatable assistant overlay: `claude`, `gh-copilot`, `codeassistant`, `cursor` |
+| `-p`, `--preset` | `default` | Workflow preset name from `~/.config/projboot/presets.toml` (see `projboot list-presets`) |
+| `--arch` | `modular` | Architecture style wired into agent instructions |
+| `--outputs-dir` | `outputs` | Directory created and wired for generated artifacts/outputs |
+| `--scripts-dir` | `scripts` | Directory created and wired for helper/automation scripts |
+| `--prompts-file` | `PROMPTS.md` | File created and wired for ordered project prompts |
+| `-r`, `--remote` | `None` | Remote provider (`github` / `gh`) |
+| `--create` | `False` | Create the remote repository on GitHub and push all scaffolded files |
+| `--clone` | `False` | Keep local working directory initialized alongside remote creation |
+| `--license` | `none` | License: `mit`, `apache2`, `gpl3`, `none` |
+| `--holder` | `<name>` | Copyright holder for `LICENSE` |
+| `-V`, `--var` | `[]` | Extra template variable as `key=value` (repeatable) |
+| `--no-git` | `False` | Skip running `git init -b main` locally |
+| `--no-graphify` | `False` | Skip running `graphify update .` locally |
+| `--force` | `False` | Overwrite a non-empty local target directory |
 
 ### What `projboot create` Generates
 
@@ -69,7 +129,22 @@ projboot list-presets
 ```
 
 This creates:
-- `~/.config/projboot/presets.toml` — Define named presets (`default`, `clean-arch`, or your own) with default `arch`, `outputs_dir`, `scripts_dir`, `prompts_file`, and `agents`.
+- `~/.config/projboot/presets.toml` — Define named presets (`default`, `clean-arch`, or your own) with default `arch`, `outputs_dir`, `scripts_dir`, `prompts_file`, and `agents`:
+  ```toml
+  [presets.default]
+  arch = "modular"
+  outputs_dir = "outputs"
+  scripts_dir = "scripts"
+  prompts_file = "PROMPTS.md"
+  agents = []
+
+  [presets.clean-arch]
+  arch = "clean-architecture"
+  outputs_dir = "artifacts/outputs"
+  scripts_dir = "scripts"
+  prompts_file = "docs/PROMPTS.md"
+  agents = ["claude", "gh-copilot"]
+  ```
 - `~/.config/projboot/skills/` — Any skill files placed here are automatically copied into `.agents/skills/` and rendered with your project's `$name`, `$arch`, `$outputs_dir`, `$scripts_dir`, and `$prompts_file` variables.
 - `~/.config/projboot/remember/` — Starter memory templates copied into `.remember/` on every new project.
 
