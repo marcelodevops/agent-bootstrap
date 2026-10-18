@@ -99,9 +99,9 @@ TEMPLATES: dict[str, dict] = {
                 "{{- end }}\n\n"
                 '{{- define "$name.fullname" -}}\n'
                 "{{- if .Values.fullnameOverride }}\n"
-                '{{ .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}\n'
+                '{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}\n'
                 "{{- else }}\n"
-                '{{ printf "%s" .Chart.Name | trunc 63 | trimSuffix "-" }}\n'
+                '{{- printf "%s" .Chart.Name | trunc 63 | trimSuffix "-" }}\n'
                 "{{- end }}\n"
                 "{{- end }}\n\n"
                 '{{- define "$name.selectorLabels" -}}\n'
@@ -136,7 +136,7 @@ TEMPLATES: dict[str, dict] = {
                 "    spec:\n"
                 "      containers:\n"
                 "        - name: $name\n"
-                "          image: \"{{ .Values.image.repository }}:{{ .Values.image.tag }}\"\n"
+                "          image: \"{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}\"\n"
             ),
             "templates/service.yaml": (
                 "apiVersion: v1\n"

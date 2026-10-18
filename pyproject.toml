@@ -27,7 +27,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "build>=1.0"]
+dev = ["pytest>=8", "build>=1.0", "PyYAML>=6.0"]
 
 [project.urls]
 Homepage = "https://github.com/marcelodevops/project_bootstrapper"
