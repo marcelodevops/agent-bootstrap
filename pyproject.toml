@@ -3,21 +3,43 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "project-bootstrapper"
-version = "0.1.0"
-description = "Scaffold projects from curated templates or a dirtree layout"
+name = "agent-bootstrap"
+description = "Scaffold AI-agent-ready projects from curated templates, presets, or a dirtree layout"
+readme = "README.md"
 requires-python = ">=3.11"
+license = {file = "LICENSE"}
+authors = [{name = "marcelodevops"}]
+keywords = ["scaffold", "boilerplate", "ai-agents", "project-template", "codegen", "cli"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Code Generators",
+]
+dynamic = ["version"]
 dependencies = [
     "typer>=0.9",
     "PyGithub>=2.0",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "build>=1.0"]
+
+[project.urls]
+Homepage = "https://github.com/marcelodevops/project_bootstrapper"
+Repository = "https://github.com/marcelodevops/project_bootstrapper"
+Issues = "https://github.com/marcelodevops/project_bootstrapper/issues"
 
 [project.scripts]
-project-bootstrapper = "bootstrapper.cli:app"
+agent-bootstrap = "bootstrapper.cli:app"
 projboot = "bootstrapper.cli:app"
 
 [tool.setuptools]
 packages = ["bootstrapper"]
+
+[tool.setuptools.dynamic]
+version = {attr = "bootstrapper.__version__"}

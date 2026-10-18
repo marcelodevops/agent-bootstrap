@@ -1,12 +1,12 @@
-# project-bootstrapper (`projboot`)
+# agent-bootstrap (`projboot`)
 
 Scaffold AI-agent-ready projects from curated language templates, customizable workflow presets, or a `tree`-style layout — locally first, with one-command GitHub repository creation.
 
 ## Install
 
 ```bash
-pip install -e .            # installs both `projboot` and `project-bootstrapper`
-pip install -e ".[dev]"     # + pytest for the test suite
+pip install agent-bootstrap          # installs both `projboot` and `agent-bootstrap`
+pip install -e ".[dev]"              # dev: + pytest for the test suite
 ```
 
 Requires Python 3.11+. Local scaffolding needs no token and no network; GitHub remote creation (`-r github --create`) uses `GITHUB_TOKEN`.
