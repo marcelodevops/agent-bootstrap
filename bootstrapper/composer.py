@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import shutil
 import subprocess
 
@@ -16,6 +16,46 @@ DEFAULT_GRAPHIFY_BIN = Path("/Users/mac/.local/bin/graphify")
 
 class PathCollisionError(ValueError):
     """Two composition layers produce the same path with different content."""
+
+
+def find_output_conflicts(files: dict[str, str]) -> None:
+    """Raise ``PathCollisionError`` if the plan would silently lose content.
+
+    Detects two conflicts that the raw-key merge cannot see because they only
+    appear once paths are rendered/normalized:
+
+    * **Same destination via alias** — e.g. ``README.md`` and ``./README.md``
+      normalize to one path but carry different content, so one would overwrite
+      the other. Identical content under an alias is allowed (nothing is lost).
+    * **File over directory** — e.g. a rendered file ``src`` alongside
+      ``src/main.py``; ``src`` must be a directory to hold the latter, so writing
+      either order crashes halfway and leaves a partial project.
+
+    Ancestors that are only ever directories (``.github`` in
+    ``.github/workflows/ci.yml``) are not files here, so valid plans pass.
+    """
+    owners: dict[str, tuple[str, str]] = {}  # normalized path -> (original, content)
+    for rel, content in files.items():
+        norm = PurePosixPath(rel).as_posix()
+        prev = owners.get(norm)
+        if prev is not None and prev[1] != content:
+            raise PathCollisionError(
+                f"'{prev[0]}' and '{rel}' resolve to the same output '{norm}' "
+                "with different content; adjust --prompts-file/--outputs-dir/"
+                "--scripts-dir or the agent set so nothing is overwritten"
+            )
+        owners[norm] = (rel, content)
+
+    destinations = set(owners)
+    for norm, (rel, _content) in owners.items():
+        for ancestor in PurePosixPath(norm).parents:
+            apos = ancestor.as_posix()
+            if apos in destinations and apos != norm:
+                other = owners[apos][0]
+                raise PathCollisionError(
+                    f"'{other}' is generated as a file but is also the parent "
+                    f"directory of '{rel}'; refusing to create a conflicting path"
+                )
 
 
 def _merge(dst: dict[str, str], src: dict[str, str], layer: str) -> None:
@@ -70,12 +110,24 @@ def compose_project_files(
         if lic_body is not None:
             _merge(raw_files, {"LICENSE": lic_body}, "license")
 
-    rendered = {
-        render(path, **variables): render(body, **variables)
-        for path, body in raw_files.items()
-    }
+    rendered: dict[str, str] = {}
+    for path, body in raw_files.items():
+        rendered_path = render(path, **variables)
+        rendered_body = render(body, **variables)
+        # Two different raw paths may render to the same destination; refuse to
+        # let a dict literal silently keep only the last one's content.
+        if (
+            rendered_path in rendered
+            and rendered[rendered_path] != rendered_body
+        ):
+            raise PathCollisionError(
+                f"rendered path '{rendered_path}' is produced twice with "
+                "different content; refusing to overwrite"
+            )
+        rendered[rendered_path] = rendered_body
     if not include_graphify:
         rendered = _strip_graphify(rendered)
+    find_output_conflicts(rendered)
     return rendered
 
 

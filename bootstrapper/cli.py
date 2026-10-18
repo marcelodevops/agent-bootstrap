@@ -9,7 +9,12 @@ import typer
 
 from . import dirtree
 from .agents import SUPPORTED_AGENTS
-from .composer import compose_project_files, run_post_hooks
+from .composer import (
+    PathCollisionError,
+    compose_project_files,
+    find_output_conflicts,
+    run_post_hooks,
+)
 from .presets import (
     get_config_dir,
     init_config_dir,
@@ -69,18 +74,72 @@ def _safe_join(base: Path, rel: str) -> Path:
     return candidate
 
 
+def _reject_resolved_collisions(
+    planned: list[tuple[str, str, Path]], root: Path
+) -> None:
+    """Refuse a write plan whose *resolved* destinations collide.
+
+    ``find_output_conflicts`` normalizes lexically (``PurePosixPath``) and so
+    cannot see two things that only unify once a path is resolved against the
+    filesystem:
+
+    * a ``..`` traversal alias — ``dir/../README.md`` and ``README.md`` resolve
+      to one file, so the last write would silently win;
+    * an in-root symlink alias — ``alias/file.txt`` (``alias -> real``) and
+      ``real/file.txt`` resolve to the same file.
+
+    It also re-checks file/ancestor conflicts on resolved paths. Runs before the
+    first ``mkdir``/``write_text``. Containment (escaping the target) is still
+    enforced by ``_safe_join``.
+    """
+    owners: dict[Path, tuple[str, str]] = {}  # resolved dest -> (rel, content)
+    for rel, content, path in planned:
+        prev = owners.get(path)
+        if prev is not None and prev[1] != content:
+            raise PathCollisionError(
+                f"'{prev[0]}' and '{rel}' resolve to the same output "
+                f"{_display(path, root)!r} through a '..' traversal or a symlink; "
+                "refusing to overwrite one with the other"
+            )
+        owners.setdefault(path, (rel, content))
+
+    destinations = set(owners)
+    for path, (rel, _content) in owners.items():
+        for ancestor in path.parents:
+            if ancestor in destinations:
+                other = owners[ancestor][0]
+                raise PathCollisionError(
+                    f"'{other}' resolves to a file that is also the parent "
+                    f"directory of '{rel}' ({_display(path, root)!r}); refusing to "
+                    "create a conflicting path"
+                )
+
+
+def _display(path: Path, root: Path) -> str:
+    """Render a resolved destination relative to the target root for messages."""
+    try:
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        return str(path)
+
+
 def _write_local(target: Path, files: dict[str, str], force: bool) -> None:
     if target.exists() and any(target.iterdir()) and not force:
         typer.echo(f"Refusing to overwrite non-empty dir {target}/ (use --force)", err=True)
         raise typer.Exit(code=1)
-    # Validate every path first so an escaping/empty path aborts before any
-    # file is written, instead of leaving a half-generated project behind.
+    # Validate every path first so an escaping/empty path or a destination
+    # collision aborts before any file is written, instead of leaving a
+    # half-generated project behind. Two layers of checks run here: the lexical
+    # composition contract (find_output_conflicts) and the resolved-destination
+    # preflight that catches '..'/symlink aliases lexical checks cannot see.
     try:
-        planned = [(content, _safe_join(target, rel)) for rel, content in files.items()]
+        find_output_conflicts(files)
+        planned = [(rel, content, _safe_join(target, rel)) for rel, content in files.items()]
+        _reject_resolved_collisions(planned, target.resolve())
     except ValueError as exc:
         typer.echo(f"Invalid output path: {exc}", err=True)
         raise typer.Exit(code=1) from exc
-    for content, path in planned:
+    for _rel, content, path in planned:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content)
     typer.echo(f"Scaffolded {len(files)} file(s) into {target}/")
