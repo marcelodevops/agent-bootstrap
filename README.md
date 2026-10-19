@@ -39,10 +39,10 @@ projboot create new-project \
 ### What `projboot create` Generates
 
 1. **Base Language Stack (`-l / --lang`)**:
-   - `python` / `python-microservice`: `src/` layout, `pyproject.toml`, `Dockerfile`, GitHub CI
+   - `python` / `python-microservice`: installable **starter** (not a production microservice) — `src/appstarter/` package with both documented run paths (the `appstarter` console script and `python -m appstarter`), `tests/`, `pyproject.toml`, `Dockerfile`, GitHub CI running `pytest` + `python -m build`. The import package is deliberately named `appstarter` regardless of the project name, so hyphenated identities like `my-app` still yield a stable `import appstarter`
    - `typescript`: `package.json`, `tsconfig.json`, `src/index.ts`, multi-stage `Dockerfile`
    - `helm-chart`: `Chart.yaml`, `values.yaml`, `templates/`, `helm lint` CI
-   - `rails`: Minimal Rails skeleton
+   - `rails`: **EXPERIMENTAL layout only — not a runnable Rails app.** A partial sketch (`Gemfile`, `config.ru`, `config/application.rb`, one controller); `config/environment.rb`, `config/boot.rb`, `config/routes.rb`, `bin/rails`, `Rakefile`, `app/views/` and `db/` are absent, and `rails` `~> 7.1` additionally needs Ruby >= 3.1 and `bundle install`. Use `rails new` for a verified application
    - `none`: Minimal agent-only repo (`README.md` + `.gitignore`)
 2. **Universal Agent Harness (Always Included)**:
    - `AGENTS.md`: Project overview, `$arch` rules, directory map (`$outputs_dir/`, `$scripts_dir/`, `$prompts_file`), and `graphify` instructions

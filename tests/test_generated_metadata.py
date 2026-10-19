@@ -62,8 +62,10 @@ def test_helm_chart_yaml_preserves_description():
 def test_markdown_readme_shows_description_unchanged():
     readme = _render("python-microservice", TRICKY)["README.md"]
     # Prose keeps the literal, human-readable text: no escaping, folds, or
-    # dropped characters.
-    assert readme == f"# {BASE['name']}\n\n{TRICKY}\n"
+    # dropped characters. B3 appends quickstart/test commands after this
+    # header, so the guarantee is asserted as an exact prefix rather than full
+    # equality: the title and description bytes must still be verbatim.
+    assert readme.startswith(f"# {BASE['name']}\n\n{TRICKY}\n")
 
 
 # --- template syntax that must NOT be touched -------------------------------
