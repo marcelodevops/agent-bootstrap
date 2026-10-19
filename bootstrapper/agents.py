@@ -55,16 +55,7 @@ AGENT_OVERLAYS: dict[str, dict[str, str]] = {
             "- **Skills**: `.agents/skills/`\n"
             "- **Knowledge graph**: `graphify-out/` (run `graphify update .` after code changes)\n"
         ),
-        ".claude/settings.json": (
-            "{\n"
-            '  "project": "$name",\n'
-            '  "conventions": {\n'
-            '    "outputsDir": "$outputs_dir",\n'
-            '    "scriptsDir": "$scripts_dir",\n'
-            '    "promptsFile": "$prompts_file"\n'
-            "  }\n"
-            "}\n"
-        ),
+        ".claude/settings.json": "{\n}\n",
     },
     "gh-copilot": {
         ".github/copilot-instructions.md": (
@@ -101,8 +92,8 @@ AGENT_OVERLAYS: dict[str, dict[str, str]] = {
     "cursor": {
         ".cursor/rules/project.mdc": (
             "---\n"
-            "description: Core project architecture and directory rules for $name\n"
-            "globs: *\n"
+            'description: "Core project architecture and directory rules for $name"\n'
+            'globs: "**/*"\n'
             "alwaysApply: true\n"
             "---\n\n"
             "# $name Rules\n\n"

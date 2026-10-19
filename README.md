@@ -52,10 +52,11 @@ projboot create new-project \
    - `$prompts_file` (default `PROMPTS.md`): Ordered prompt catalog
    - `$outputs_dir/` & `$scripts_dir/` directories
 3. **Assistant Overlays (`-a / --agent`, repeatable)**:
-   - `-a claude`: `CLAUDE.md` + `.claude/settings.json`
+   - `-a claude`: `CLAUDE.md` (project conventions and `@AGENTS.md` / `@.remember/MEMORY.md` references) + `.claude/settings.json` (minimal valid `{}` JSON settings file; project conventions live in `CLAUDE.md` and `AGENTS.md` rather than unsupported settings keys)
    - `-a gh-copilot`: `.github/copilot-instructions.md` + `.github/prompts/bootstrap.prompt.md`
-   - `-a codeassistant`: `.codeassistant/instructions.md`
-   - `-a cursor`: `.cursor/rules/project.mdc`
+   - `-a codeassistant`: `.codeassistant/instructions.md` (custom/legacy instruction-file adapter kept for compatibility; does not claim undocumented native client auto-loading)
+   - `-a cursor`: `.cursor/rules/project.mdc` (YAML frontmatter with quoted `globs` and `alwaysApply: true`)
+   - *Verification scope*: automated tests verify static format decoding (JSON and YAML frontmatter parsing) of generated overlay files; live native client behavior must be verified in the respective assistant client.
 
 ---
 
