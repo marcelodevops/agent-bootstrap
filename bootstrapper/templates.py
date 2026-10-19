@@ -12,6 +12,7 @@ body needs a literal ``$name``-looking token, escape it as ``$$``.
 
 from __future__ import annotations
 
+import json
 from string import Template
 
 # name -> {metadata, files: {path: template_body}}
@@ -26,7 +27,7 @@ TEMPLATES: dict[str, dict] = {
                 "[project]\n"
                 'name = "$name"\n'
                 'version = "0.1.0"\n'
-                'description = "$description"\n'
+                'description = $description_json\n'
                 'requires-python = ">=3.11"\n\n'
                 "[build-system]\n"
                 'requires = ["setuptools>=61"]\n'
@@ -72,7 +73,7 @@ TEMPLATES: dict[str, dict] = {
             "Chart.yaml": (
                 'apiVersion: v2\n'
                 'name: $name\n'
-                'description: $description\n'
+                'description: $description_json\n'
                 'type: application\n'
                 'version: 0.1.0\n'
                 'appVersion: "1.0.0"\n'
@@ -202,7 +203,7 @@ TEMPLATES: dict[str, dict] = {
                 "{\n"
                 "  \"name\": \"$name\",\n"
                 "  \"version\": \"0.1.0\",\n"
-                "  \"description\": \"$description\",\n"
+                "  \"description\": $description_json,\n"
                 "  \"scripts\": {\n"
                 "    \"build\": \"tsc\",\n"
                 "    \"start\": \"node dist/index.js\"\n"
@@ -309,7 +310,26 @@ LICENSES: dict[str, str] = {
 
 
 def render(text: str, **variables: str) -> str:
-    """Render a template body. Undefined ``$tokens`` are left untouched."""
+    """Render a template body. Undefined ``$tokens`` are left untouched.
+
+    A ``$description_json`` token is derived from ``description`` using the
+    stdlib ``json`` encoder. Structured formats (``pyproject.toml``,
+    ``package.json``, ``Chart.yaml``) interpolate that token so a description
+    with quotes, backslashes, newlines or non-ASCII text becomes a single valid,
+    decodable string literal; the surrounding quotes come from the encoder, so
+    those templates must not add their own. ``$description`` itself stays the
+    raw, human-readable value for Markdown and agent prose.
+
+    This is format-aware stdlib serialization, not a bespoke escaping framework:
+    a JSON string literal is also a valid TOML basic string and a valid YAML
+    double-quoted scalar, so one encoded token covers all three structured
+    targets at runtime without importing PyYAML.
+    """
+    if isinstance(variables.get("description"), str):
+        variables = {
+            **variables,
+            "description_json": json.dumps(variables["description"], ensure_ascii=False),
+        }
     return Template(text).safe_substitute(**variables)
 
 
