@@ -195,13 +195,14 @@ def test_create_ai_project_with_github_remote(tmp_path, monkeypatch):
             "-r",
             "github",
             "--create",
-            "--clone",
             "--no-git",
             "--no-graphify",
         ]
     )
     assert res.exit_code == 0, res.stdout
-    # Local directory is created AND remote files are pushed
+    # Local directory is created AND remote files are pushed.
+    # (No --clone here: A3 rejects --clone with --no-git as contradictory, and
+    #  connected-checkout behavior is covered by test_clone_produces_connected_local_repo.)
     assert (tmp_path / "new-project" / "CLAUDE.md").exists()
     pushed = {p for p, _ in calls}
     assert "AGENTS.md" in pushed

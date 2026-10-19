@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
+import re
+import shutil
+import tempfile
 from pathlib import Path
 
 import typer
@@ -27,6 +31,57 @@ app = typer.Typer(
     help="Scaffold projects and AI agent harnesses from curated templates, presets, or dirtrees.",
     no_args_is_help=True,
 )
+
+# A project name is used directly as the local directory and as a package /
+# repository identity, so it must be one safe path segment free of separators,
+# whitespace, quotes and control characters. Conservative shared contract: start
+# with a letter or digit, then letters, digits, dot, hyphen, underscore (or
+# accented letters); no length games beyond 100. This rejects ``../evil``,
+# ``/etc/passwd``, ``sub/out``, ``foo bar``, ``foo\nbar`` and ``-lead`` while
+# accepting ``demo``, ``new-project``, ``my_app``, ``core.v2`` and ``café``.
+# ``\Z`` rather than ``$`` is required: ``$`` also matches the position before a
+# terminal newline, which would let ``demo\n`` through and scaffold into a
+# newline-named directory. ``fullmatch`` also refuses acceptance on a prefix.
+_NAME_RE = re.compile(r"[A-Za-z0-9\u00C0-\u024F][A-Za-z0-9._\u00C0-\u024F-]{0,99}\Z")
+
+# Prefix for the temporary sibling directory a new project is staged in before
+# it is renamed into place (see _write_local).
+_TMP_PREFIX = ".projboot-staging-"
+
+
+def _validate_name(name: str) -> None:
+    """Reject identities that are not a single safe package/repo segment."""
+    if name in (".", ".."):
+        raise typer.BadParameter("project name must not be '.' or '..'")
+    if _NAME_RE.fullmatch(name):
+        return
+    raise typer.BadParameter(
+        f"invalid project name {name!r}: use a package/repository identity "
+        "(letters, digits, dot, hyphen, underscore; must start with a letter or "
+        "digit; no path separators, spaces, quotes or control characters)"
+    )
+
+
+def _reject_contradictory_options(
+    *, clone: bool, create_remote: bool, no_git: bool
+) -> None:
+    """Refuse plainly incompatible flag combinations before any local write.
+
+    ``--clone`` means "leave a working checkout connected to the created remote",
+    so it needs ``--create`` (a remote to connect to) and needs git (so
+    ``--no-git`` contradicts it). ``--remote`` without ``--create`` stays the
+    existing informational "not uploading" behavior and is NOT rejected here.
+    """
+    if clone and not create_remote:
+        raise typer.BadParameter(
+            "--clone requires --create: there is no remote repository to connect "
+            "the local checkout to"
+        )
+    if clone and no_git:
+        raise typer.BadParameter(
+            "--clone needs git but --no-git was set; drop --no-git to get a "
+            "connected checkout, or drop --clone to scaffold without one"
+        )
 
 
 def _parse_vars(pairs: list[str]) -> dict[str, str]:
@@ -123,25 +178,100 @@ def _display(path: Path, root: Path) -> str:
         return str(path)
 
 
+def _force_remove(func, path, _exc) -> None:  # pragma: no cover - cleanup safety net
+    """shutil.rmtree onerror: make a read-only entry removable, then retry once."""
+    try:
+        os.chmod(path, 0o700)
+        func(path)
+    except OSError:
+        pass
+
+
+def _reject_existing_fs_conflicts(rroot: Path, planned: list[tuple[str, str, Path]]) -> None:
+    """Refuse a --force merge whose plan fights the *on-disk* filesystem.
+
+    When the target already exists (forced overwrite), a planned file whose name
+    is currently a directory, or a planned nested path whose ancestor is
+    currently a file, would crash ``mkdir``/``write_text`` half-way and leave a
+    partially written target. Detecting it up front lets the pre-existing tree
+    survive untouched. This is filesystem-state aware, unlike the plan-only
+    ``find_output_conflicts`` and ``_reject_resolved_collisions`` checks.
+    """
+    for rel, _content, path in planned:
+        try:
+            relative = path.relative_to(rroot)
+        except ValueError:  # outside the target: already refused by _safe_join
+            continue
+        parts = relative.parts
+        for i in range(len(parts) - 1):  # every ancestor segment must be a dir
+            ancestor = rroot.joinpath(*parts[: i + 1])
+            if ancestor.exists() and not ancestor.is_dir():
+                raise PathCollisionError(
+                    f"existing {_display(ancestor, rroot)!r} is a file but the "
+                    f"plan needs it to be a directory for '{rel}'"
+                )
+        final = rroot.joinpath(*parts)  # the file itself must not be a live dir
+        if final.is_dir():
+            raise PathCollisionError(
+                f"existing {_display(final, rroot)!r} is a directory but the "
+                f"plan writes a file at '{rel}'"
+            )
+
+
 def _write_local(target: Path, files: dict[str, str], force: bool) -> None:
-    if target.exists() and any(target.iterdir()) and not force:
+    nonempty_existing = target.is_dir() and any(target.iterdir())
+    if nonempty_existing and not force:
         typer.echo(f"Refusing to overwrite non-empty dir {target}/ (use --force)", err=True)
         raise typer.Exit(code=1)
-    # Validate every path first so an escaping/empty path or a destination
-    # collision aborts before any file is written, instead of leaving a
-    # half-generated project behind. Two layers of checks run here: the lexical
-    # composition contract (find_output_conflicts) and the resolved-destination
-    # preflight that catches '..'/symlink aliases lexical checks cannot see.
+
+    rroot = target.resolve()
+    # Validate the whole plan before any write. Three layers, cheapest first:
+    # lexical composition collisions, resolved-destination aliases/symlinks (the
+    # accepted A1 guards), and, only for a forced merge, on-disk type conflicts.
     try:
         find_output_conflicts(files)
         planned = [(rel, content, _safe_join(target, rel)) for rel, content in files.items()]
-        _reject_resolved_collisions(planned, target.resolve())
+        _reject_resolved_collisions(planned, rroot)
+        if target.exists() and not target.is_dir():
+            raise PathCollisionError(f"target {_display(rroot, rroot)!r} exists and is not a directory")
+        if nonempty_existing:
+            _reject_existing_fs_conflicts(rroot, planned)
     except ValueError as exc:
         typer.echo(f"Invalid output path: {exc}", err=True)
         raise typer.Exit(code=1) from exc
-    for _rel, content, path in planned:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content)
+
+    if nonempty_existing:
+        # Forced merge into an existing tree: unrelated files must survive, so an
+        # atomic whole-directory swap is impossible. Write in place after the
+        # preflight above; on a late disk error leave the target as-is (no atomic
+        # publish is promised for existing directories).
+        try:
+            for _rel, content, path in planned:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content)
+        except OSError as exc:
+            typer.echo(f"Failed to write into {target}/: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+        typer.echo(f"Scaffolded {len(files)} file(s) into {target}/")
+        return
+
+    # New (or empty) target: stage the complete scaffold in a temporary sibling
+    # and rename it into place only after every file is written. A failure partway
+    # removes just our staging directory and leaves the requested target absent.
+    parent = rroot.parent if rroot.parent != rroot else Path.cwd()
+    staging = Path(tempfile.mkdtemp(prefix=f"{_TMP_PREFIX}{rroot.name}.", dir=parent))
+    try:
+        for rel, content, path in planned:
+            dest = staging / path.relative_to(rroot)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(content)
+        staging.replace(rroot)
+    except OSError as exc:
+        shutil.rmtree(staging, onerror=_force_remove)
+        typer.echo(
+            f"Failed to scaffold {target}/: {exc}; target left unchanged", err=True
+        )
+        raise typer.Exit(code=1) from exc
     typer.echo(f"Scaffolded {len(files)} file(s) into {target}/")
 
 
@@ -342,6 +472,11 @@ def create(
     ),
 ) -> None:
     """Create an AI-agent-enabled project with universal harness, presets, and assistant overlays."""
+    _validate_name(name)
+    _reject_contradictory_options(
+        clone=clone, create_remote=create_remote, no_git=no_git
+    )
+
     if remote is not None and remote.lower() not in ("github", "gh"):
         raise typer.BadParameter(f"Unsupported remote {remote!r}. Supported: github")
 
@@ -389,12 +524,9 @@ def create(
     elif remote:
         typer.echo(f"Remote '{remote}' selected but --create not given; not uploading.")
 
-    # --clone should leave a checkout connected to the remote: configure origin
-    # and make an initial commit. This needs git, so it's skipped under --no-git.
+    # --clone was validated up front to require --create and git, so a connected
+    # checkout here always has a remote URL to wire as origin and commit against.
     connect_url = clone_url if clone else None
-    if clone and no_git:
-        typer.echo("Note: --clone needs git but --no-git was set; repo not connected.")
-        connect_url = None
 
     for msg in run_post_hooks(
         target,
@@ -434,6 +566,7 @@ def init(
     ),
 ) -> None:
     """Create a project scaffold from a curated template."""
+    _validate_name(name)
     variables = _variables(name, description, holder, _parse_vars(variable))
     files = _build_template_files(template, variables, license)
     _emit(
@@ -467,6 +600,7 @@ def init_from_tree(
     ),
 ) -> None:
     """Create a project scaffold from a dirtree layout file."""
+    _validate_name(name)
     files = _tree_to_files(tree_file, gitkeep)
     _emit(
         files,
