@@ -199,6 +199,7 @@ TEMPLATES: dict[str, dict] = {
         "description": "TypeScript service with package.json, tsconfig, multi-stage Dockerfile",
         "files": {
             "README.md": "# $name\n\n$description\n",
+            ".gitignore": "node_modules/\ndist/\n",
             "package.json": (
                 "{\n"
                 "  \"name\": \"$name\",\n"
@@ -218,6 +219,8 @@ TEMPLATES: dict[str, dict] = {
                 "{\n"
                 "  \"compilerOptions\": {\n"
                 "    \"target\": \"ES2022\",\n"
+                "    \"module\": \"nodenext\",\n"
+                "    \"moduleResolution\": \"nodenext\",\n"
                 "    \"outDir\": \"dist\",\n"
                 "    \"rootDir\": \"src\",\n"
                 "    \"strict\": true\n"
