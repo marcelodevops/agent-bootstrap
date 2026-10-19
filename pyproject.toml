@@ -30,9 +30,9 @@ dependencies = [
 dev = ["pytest>=8", "build>=1.0", "PyYAML>=6.0"]
 
 [project.urls]
-Homepage = "https://github.com/marcelodevops/project_bootstrapper"
-Repository = "https://github.com/marcelodevops/project_bootstrapper"
-Issues = "https://github.com/marcelodevops/project_bootstrapper/issues"
+Homepage = "https://github.com/marcelodevops/agent-bootstrap"
+Repository = "https://github.com/marcelodevops/agent-bootstrap"
+Issues = "https://github.com/marcelodevops/agent-bootstrap/issues"
 
 [project.scripts]
 agent-bootstrap = "bootstrapper.cli:app"
