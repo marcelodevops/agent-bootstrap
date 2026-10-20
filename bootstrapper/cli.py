@@ -297,23 +297,20 @@ def _write_local(target: Path, files: dict[str, str], force: bool) -> None:
 
 
 def _push_github(
-    files: dict[str, str],
     *,
     name: str,
     description: str,
     private: bool,
     org: str | None,
     force: bool,
-    upload_files: bool = True,
 ) -> str:
-    """Create a GitHub repository, optionally uploading files through its API.
+    """Create or select a GitHub repository without changing its contents.
 
     Returns the repo's clone URL so callers can wire a local checkout.
     """
     # Imported lazily so --local and tests never require PyGithub/network.
     from .github_utils import (
         RepoExistsError,
-        add_file,
         create_repo,
         get_github,
         get_owner,
@@ -325,17 +322,11 @@ def _push_github(
         repo = create_repo(owner, name, description, private, force=force)
     except RepoExistsError as exc:
         typer.echo(
-            f"Repo {exc.full_name} already exists; refusing to overwrite its files "
-            "(pass --force to update them).",
+            f"Repo {exc.full_name} already exists; refusing to use it without --force.",
             err=True,
         )
         raise typer.Exit(code=1) from exc
     typer.echo(f"Using GitHub repository: {repo.clone_url}")
-    if upload_files:
-        for path, content in files.items():
-            add_file(repo, path, content, f"Add {path}")
-            typer.echo(f"  + {path}")
-        typer.echo("Done.")
     return repo.clone_url
 
 
@@ -349,18 +340,44 @@ def _emit(
     local: bool,
     force: bool,
 ) -> None:
-    """Write the scaffold to disk (--local) or push it to a new GitHub repo."""
+    """Write locally, or push a temporary checkout to a GitHub repository."""
     if local:
         _write_local(Path(name), files, force)
         return
-    _push_github(
-        files,
+    clone_url = _push_github(
         name=name,
         description=description,
         private=private,
         org=org,
         force=force,
     )
+    with tempfile.TemporaryDirectory(prefix="projboot-init-") as staging:
+        target = Path(staging) / name
+        _write_local(target, files, force=False)
+        messages = run_post_hooks(
+            target,
+            init_git=True,
+            run_graphify=False,
+            connect_remote_url=clone_url,
+            make_commit=True,
+            stage_paths=list(files),
+        )
+    if not all(
+        required in messages
+        for required in (
+            "Initialized git repository (main)",
+            "Created initial commit",
+            "Pushed initial commit to origin (main)",
+        )
+    ) or not any("origin remote:" in message for message in messages):
+        for message in messages:
+            typer.echo(f"  * {message}")
+        typer.echo(
+            f"Remote repository {clone_url} exists, but the scaffold push did not complete.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    typer.echo(f"Pushed scaffold to {clone_url} with one Git history.")
 
 
 def _build_template_files(
@@ -538,7 +555,9 @@ def create(
         False, "--no-graphify", help="Skip running `graphify update .` locally"
     ),
     force: bool = typer.Option(
-        False, "--force", help="Overwrite a non-empty local target directory"
+        False,
+        "--force",
+        help="Merge into a non-empty local target or use an existing remote; pushes never rewrite remote history",
     ),
 ) -> None:
     """Create an AI-agent-enabled project with universal harness, presets, and assistant overlays."""
@@ -567,29 +586,29 @@ def create(
     )
 
     target = Path(name)
-    _write_local(target, files, force)
+    _validate_write_plan(target, files, force)
 
-    # Upload only when --create is given; --remote just names the provider
-    # (defaulting to github), so the two flags no longer overlap silently.
+    # --remote only names the provider. --create makes the remote and, unless
+    # --no-git was selected, pushes the generated scaffold with normal Git.
     clone_url: str | None = None
     if create_remote:
         if remote is None:
             typer.echo("No --remote provider given; defaulting to github.")
         clone_url = _push_github(
-            files,
             name=name,
             description=description,
             private=private,
             org=org,
             force=force,
-            upload_files=not clone,
         )
     elif remote:
         typer.echo(f"Remote '{remote}' selected but --create not given; not uploading.")
 
-    # --clone was validated up front to require --create and git, so a connected
-    # checkout here always has a remote URL to wire as origin and commit against.
-    connect_url = clone_url if clone else None
+    _write_local(target, files, force)
+
+    # --clone remains a compatibility alias; all Git-enabled remote creates
+    # connect origin and push the same initial history.
+    connect_url = clone_url if (clone_url and not no_git) else None
 
     hook_messages = run_post_hooks(
         target,
@@ -621,7 +640,7 @@ def create(
         no_graphify=no_graphify,
         hook_messages=hook_messages,
     )
-    if create_remote and clone and not clone_ready:
+    if create_remote and not no_git and not clone_ready:
         raise typer.Exit(code=1)
 
 
@@ -775,21 +794,20 @@ def _echo_create_summary(
         )
 
     if create_remote and clone_url:
-        if clone:
-            if origin_msg and commit_msg and push_msg:
-                typer.echo(
-                    f"  GitHub remote: ran — created {clone_url}, wired origin, "
-                    "created the local commit, and pushed the shared history"
-                )
-            else:
-                typer.echo(
-                    f"  GitHub remote: partial / pending — created {clone_url}, "
-                    "but local origin/commit/push did not complete"
-                )
+        if no_git:
+            typer.echo(
+                f"  GitHub remote: selected {clone_url}; scaffold not pushed "
+                "(--no-git); remote contents were not inspected"
+            )
+        elif origin_msg and commit_msg and push_msg:
+            typer.echo(
+                f"  GitHub remote: ran — using {clone_url}, wired origin, "
+                "created the local commit, and pushed the shared history"
+            )
         else:
             typer.echo(
-                f"  GitHub remote: ran — created {clone_url} and uploaded scaffold "
-                "files (--clone not set; local directory is not connected to origin)"
+                f"  GitHub remote: partial / pending — using {clone_url}, "
+                "but local origin/commit/push did not complete"
             )
     elif remote:
         typer.echo(
@@ -899,10 +917,12 @@ def _echo_create_summary(
             f"  git repository: pending / not initialized "
             f"({git_skip_msg or 'git init did not complete'})"
         )
-    if create_remote and clone_url and clone and not (origin_msg and commit_msg and push_msg):
+    if create_remote and clone_url and not no_git and not (
+        origin_msg and commit_msg and push_msg
+    ):
         typer.echo(
             "  local git remote/commit/push: pending / incomplete "
-            "(--clone requested, but origin, initial commit, or normal push did not complete)"
+            "(origin, initial commit, or normal push did not complete)"
         )
     if has_graphify and not graphify_ran_msg:
         typer.echo(
@@ -1012,14 +1032,14 @@ def _echo_preview(
                 "  GitHub organization (--org): not specified; authenticated owner "
                 "NOT CHECKED or resolved by preview"
             )
-        if clone:
+        if not no_git:
             typer.echo(
-                "  connect checkout (origin + initial commit): selected (--clone) — "
+                "  connect checkout (origin + initial commit): selected — "
                 "not executed by preview"
             )
         else:
             typer.echo(
-                "  connect checkout (--clone): not selected — `create` would not wire origin"
+                "  connect checkout: not selected (--no-git) — scaffold would not be pushed"
             )
     else:
         typer.echo(
@@ -1167,7 +1187,9 @@ def init(
         False, "--local", help="Write to ./<name>/ instead of GitHub"
     ),
     force: bool = typer.Option(
-        False, "--force", help="Overwrite a non-empty --local target dir"
+        False,
+        "--force",
+        help="Merge into a non-empty local target or use an existing remote; pushes never rewrite remote history",
     ),
 ) -> None:
     """Create a project scaffold from a curated template."""
@@ -1201,7 +1223,9 @@ def init_from_tree(
         False, "--local", help="Write to ./<name>/ instead of GitHub"
     ),
     force: bool = typer.Option(
-        False, "--force", help="Overwrite a non-empty --local target dir"
+        False,
+        "--force",
+        help="Merge into a non-empty local target or use an existing remote; pushes never rewrite remote history",
     ),
 ) -> None:
     """Create a project scaffold from a dirtree layout file."""

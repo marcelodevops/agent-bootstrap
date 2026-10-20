@@ -128,26 +128,35 @@ def test_bad_var_format(tmp_path, monkeypatch):
 
 
 def test_init_dispatches_to_github(tmp_path, monkeypatch):
-    # Fake the GitHub layer: assert init pushes every scaffolded file, no network.
+    # A legacy init invocation must use one normal Git push, not API file commits.
+    import subprocess
+
     import bootstrapper.github_utils as gu
 
-    calls: list[tuple[str, str]] = []
+    bare = tmp_path / "demo.git"
+    subprocess.run(["git", "init", "--bare", str(bare)], check=True, capture_output=True)
     fake_repo = MagicMock()
-    fake_repo.clone_url = "https://github.com/acme/demo.git"
+    fake_repo.clone_url = str(bare)
 
     monkeypatch.setattr(gu, "get_github", lambda: MagicMock())
     monkeypatch.setattr(gu, "get_owner", lambda gh, org: MagicMock())
     monkeypatch.setattr(gu, "create_repo", lambda owner, n, d, p, force=False: fake_repo)
-    monkeypatch.setattr(
-        gu, "add_file", lambda repo, path, content, message: calls.append((path, content))
-    )
+    monkeypatch.setattr(gu, "add_file", lambda *a, **k: pytest.fail("API upload used"))
 
     res = _run(["init", "--template", "typescript", "--name", "demo"])
     assert res.exit_code == 0, res.stdout
-    pushed = {p for p, _ in calls}
-    assert "package.json" in pushed
-    assert "src/index.ts" in pushed
-    fake_repo  # repo object was used by add_file
+    assert "Pushed scaffold" in res.stdout
+    remote_head = subprocess.run(
+        ["git", "--git-dir", str(bare), "rev-parse", "refs/heads/main"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    remote_files = subprocess.run(
+        ["git", "--git-dir", str(bare), "ls-tree", "-r", "--name-only", "main"],
+        check=True, capture_output=True, text=True,
+    ).stdout.splitlines()
+    assert remote_head
+    assert "package.json" in remote_files
+    assert "src/index.ts" in remote_files
 
 
 def test_create_ai_project_local_with_agents_and_custom_dirs(tmp_path, monkeypatch):
@@ -196,20 +205,20 @@ def test_create_ai_project_local_with_agents_and_custom_dirs(tmp_path, monkeypat
 
 def test_create_ai_project_with_github_remote(tmp_path, monkeypatch):
     import bootstrapper.github_utils as gu
+    import subprocess
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("PROJBOOT_HOME", str(tmp_path / "projboot_home"))
 
-    calls: list[tuple[str, str]] = []
+    bare = tmp_path / "new-project.git"
+    subprocess.run(["git", "init", "--bare", str(bare)], check=True, capture_output=True)
     fake_repo = MagicMock()
-    fake_repo.clone_url = "https://github.com/acme/new-project.git"
+    fake_repo.clone_url = str(bare)
 
     monkeypatch.setattr(gu, "get_github", lambda: MagicMock())
     monkeypatch.setattr(gu, "get_owner", lambda gh, org: MagicMock())
     monkeypatch.setattr(gu, "create_repo", lambda owner, n, d, p, force=False: fake_repo)
-    monkeypatch.setattr(
-        gu, "add_file", lambda repo, path, content, message: calls.append((path, content))
-    )
+    monkeypatch.setattr(gu, "add_file", lambda *a, **k: pytest.fail("API upload used"))
 
     res = _run(
         [
@@ -224,19 +233,47 @@ def test_create_ai_project_with_github_remote(tmp_path, monkeypatch):
             "-r",
             "github",
             "--create",
-            "--no-git",
             "--no-graphify",
         ]
     )
     assert res.exit_code == 0, res.stdout
-    # Local directory is created AND remote files are pushed.
-    # (No --clone here: A3 rejects --clone with --no-git as contradictory, and
-    #  connected-checkout behavior is covered by test_clone_produces_connected_local_repo.)
+    # `--clone` is no longer required for a shared local/remote Git history.
     assert (tmp_path / "new-project" / "CLAUDE.md").exists()
-    pushed = {p for p, _ in calls}
-    assert "AGENTS.md" in pushed
-    assert "CLAUDE.md" in pushed
-    assert ".github/copilot-instructions.md" in pushed
+    local_head = subprocess.run(
+        ["git", "-C", str(tmp_path / "new-project"), "rev-parse", "HEAD"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    remote_head = subprocess.run(
+        ["git", "--git-dir", str(bare), "rev-parse", "refs/heads/main"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    remote_files = subprocess.run(
+        ["git", "--git-dir", str(bare), "ls-tree", "-r", "--name-only", "main"],
+        check=True, capture_output=True, text=True,
+    ).stdout.splitlines()
+    assert local_head == remote_head
+    assert {"AGENTS.md", "CLAUDE.md", ".github/copilot-instructions.md"} <= set(remote_files)
+
+
+def test_create_remote_no_git_does_not_claim_repository_is_empty(tmp_path, monkeypatch):
+    import bootstrapper.github_utils as gu
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PROJBOOT_HOME", str(tmp_path / "projboot_home"))
+    fake_repo = MagicMock()
+    fake_repo.clone_url = "https://github.com/acme/remote-contents-unknown.git"
+    monkeypatch.setattr(gu, "get_github", lambda: MagicMock())
+    monkeypatch.setattr(gu, "get_owner", lambda gh, org: MagicMock())
+    monkeypatch.setattr(gu, "create_repo", lambda owner, n, d, p, force=False: fake_repo)
+    monkeypatch.setattr(gu, "add_file", lambda *a, **k: pytest.fail("API upload used"))
+
+    res = _run(
+        ["create", "no-git-remote", "--lang", "none", "--create", "--no-git", "--no-graphify"]
+    )
+    assert res.exit_code == 0, res.stdout
+    assert "scaffold not pushed (--no-git); remote contents were not inspected" in res.stdout
+    assert "remote is empty" not in res.stdout.lower()
+    assert "local git remote/commit/push: pending / incomplete" not in res.stdout
 
 
 def test_create_rejects_escaping_outputs_dir(tmp_path, monkeypatch):
@@ -323,6 +360,7 @@ def test_push_refuses_existing_repo_without_force(tmp_path, monkeypatch):
     res = _run(["init", "--template", "typescript", "--name", "demo"])
     assert res.exit_code != 0
     assert pushed == []  # nothing uploaded against an existing repo
+    assert not (tmp_path / "demo").exists()
 
 
 def test_config_init_and_list_presets(tmp_path, monkeypatch):

@@ -75,7 +75,7 @@ def test_clone_pushes_one_generated_history_and_excludes_unrelated_files(
     assert "GitHub remote: ran" in result.stdout
 
 
-def test_clone_push_failure_is_reported_as_partial_without_ready_claim(
+def test_default_create_push_failure_is_reported_as_partial_without_ready_claim(
     tmp_path, monkeypatch
 ):
     monkeypatch.chdir(tmp_path)
@@ -91,7 +91,7 @@ def test_clone_push_failure_is_reported_as_partial_without_ready_claim(
     result = runner.invoke(
         cli.app,
         [
-            "create", "partial-demo", "-l", "none", "--create", "--clone",
+            "create", "partial-demo", "-l", "none", "--create",
             "-r", "github", "--no-graphify",
         ],
     )
