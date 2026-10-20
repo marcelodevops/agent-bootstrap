@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
 from pathlib import Path, PurePosixPath
 import shutil
 import subprocess
@@ -152,7 +153,7 @@ def _find_graphify() -> str | None:
         if DEFAULT_GRAPHIFY_BIN == Path("~/.local/bin/graphify")
         else DEFAULT_GRAPHIFY_BIN.expanduser()
     )
-    if candidate.is_file():
+    if candidate.is_file() and os.access(candidate, os.X_OK):
         return str(candidate)
     return None
 
@@ -178,7 +179,7 @@ def run_post_hooks(
                 text=True,
             )
             messages.append("Initialized git repository (main)")
-        except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+        except (OSError, subprocess.CalledProcessError) as exc:
             messages.append(f"Skipped git init: {exc}")
 
         if connect_remote_url:
@@ -213,7 +214,7 @@ def run_post_hooks(
                     text=True,
                 )
                 messages.append("Initialized graphify knowledge graph (graphify-out/)")
-            except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+            except (OSError, subprocess.CalledProcessError) as exc:
                 messages.append(f"Skipped graphify update: {exc}")
         else:
             messages.append("Skipped graphify update (graphify binary not found)")
@@ -226,5 +227,5 @@ def _git_ok(cwd: Path, cmd: list[str]) -> bool:
     try:
         subprocess.run(cmd, cwd=cwd, check=True, capture_output=True, text=True)
         return True
-    except (FileNotFoundError, subprocess.CalledProcessError):
+    except (OSError, subprocess.CalledProcessError):
         return False

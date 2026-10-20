@@ -336,11 +336,81 @@ def test_user_store_secrets_boundary_blocks_real_env_and_allows_examples(tmp_pat
     assert ".agents/skills/deploy-skill/SKILL.md" in store_files
 
 
+def test_user_store_rejects_symlinks_to_disguised_secret_targets_and_outside_files(
+    tmp_path: Path,
+):
+    """P1 regression: symlinks in `remember/` or `skills/` (including a benignly
+    named `remember/deployment.md -> outside/.env`, an in-store symlink to `.env`,
+    an outside file symlink, or a symlinked directory) must never be read or copied
+    into generated project files, while regular `.env.example`/`.env.sample`/`.env.template`
+    files remain allowed.
+    """
+    outside = tmp_path / "outside"
+    outside.mkdir(parents=True)
+    outside_env = outside / ".env"
+    outside_env.write_text("SYNTHETIC_OUTSIDE_SECRET=do-not-copy-1\n", encoding="utf-8")
+    outside_doc = outside / "external.md"
+    outside_doc.write_text("SYNTHETIC_OUTSIDE_DOC=do-not-copy-2\n", encoding="utf-8")
+
+    config_dir = tmp_path / "symlink_store"
+    rem = config_dir / "remember"
+    sk = config_dir / "skills" / "safe-skill"
+    rem.mkdir(parents=True)
+    sk.mkdir(parents=True)
+
+    # Synthetic inside .env
+    inside_env = rem / ".env"
+    inside_env.write_text("SYNTHETIC_INSIDE_SECRET=do-not-copy-3\n", encoding="utf-8")
+
+    # Symlinks disguised with benign Markdown/skill names
+    (rem / "deployment.md").symlink_to(outside_env)
+    (rem / "local-ref.md").symlink_to(inside_env)
+    (rem / "external-notes.md").symlink_to(outside_doc)
+    (config_dir / "skills" / "linked-outside").symlink_to(
+        outside, target_is_directory=True
+    )
+
+    # Regular allowed shareable env templates and regular files
+    (rem / ".env.example").write_text("APP_NAME=$name\n", encoding="utf-8")
+    (sk / ".env.sample").write_text("SAMPLE_KEY=$name\n", encoding="utf-8")
+    (sk / ".env.template").write_text("TEMPLATE_KEY=$outputs_dir\n", encoding="utf-8")
+    (sk / "SKILL.md").write_text("# Safe skill for $name\n", encoding="utf-8")
+
+    store_files = load_user_store_files(config_dir)
+
+    assert ".remember/deployment.md" not in store_files
+    assert ".remember/local-ref.md" not in store_files
+    assert ".remember/external-notes.md" not in store_files
+    assert not any(k.startswith(".agents/skills/linked-outside/") for k in store_files)
+
+    composed = compose_project_files(
+        name="symlink-guard-app",
+        description="Symlink guard test",
+        lang="python",
+        preset=PresetConfig(name="default", agents=["claude"]),
+        config_dir=config_dir,
+        include_graphify=False,
+    )
+    assert ".remember/deployment.md" not in composed
+    assert ".remember/local-ref.md" not in composed
+    assert ".remember/external-notes.md" not in composed
+    for body in composed.values():
+        assert "do-not-copy-1" not in body
+        assert "do-not-copy-2" not in body
+        assert "do-not-copy-3" not in body
+
+    # Regular shareable templates and skill files remain preserved
+    assert ".remember/.env.example" in composed
+    assert ".agents/skills/safe-skill/.env.sample" in composed
+    assert ".agents/skills/safe-skill/.env.template" in composed
+    assert ".agents/skills/safe-skill/SKILL.md" in composed
+
+
 def test_portable_graphify_discovery_removes_hardcoded_author_path_and_uses_path_or_home(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     """`_find_graphify` must not hardcode `/Users/mac` in source code and must
-    discover `graphify` via `PATH` first, then `<HOME>/.local/bin/graphify`.
+    discover `graphify` via `PATH` first, then an executable `<HOME>/.local/bin/graphify`.
     """
     for module in (agents, composer, presets):
         source = inspect.getsource(module)
@@ -354,12 +424,17 @@ def test_portable_graphify_discovery_removes_hardcoded_author_path_and_uses_path
     with patch("bootstrapper.composer.shutil.which", return_value=None):
         assert _find_graphify() is None
 
-    # 2. Home-relative fallback ~/.local/bin/graphify is discovered when PATH misses
+    # 2. Home-relative fallback ~/.local/bin/graphify must be executable to be discovered
     local_bin = fake_home / ".local" / "bin"
     local_bin.mkdir(parents=True)
     fallback_bin = local_bin / "graphify"
     fallback_bin.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fallback_bin.chmod(0o644)
 
+    with patch("bootstrapper.composer.shutil.which", return_value=None):
+        assert _find_graphify() is None
+
+    fallback_bin.chmod(0o755)
     with patch("bootstrapper.composer.shutil.which", return_value=None):
         assert _find_graphify() == str(fallback_bin)
 
@@ -381,3 +456,39 @@ def test_portable_graphify_discovery_removes_hardcoded_author_path_and_uses_path
 
     assert calls == [[str(fallback_bin), "update", "."]]
     assert any("Initialized graphify knowledge graph" in m for m in msgs)
+
+
+def test_native_nonexecutable_home_fallback_does_not_raise_permission_error_in_run_post_hooks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """P2 regression: with a real non-executable `<HOME>/.local/bin/graphify` and no
+    mocked `subprocess.run`, `_find_graphify()` must not treat the non-executable file
+    as an installed binary, and `run_post_hooks` must report a clean best-effort skip
+    message rather than raising `PermissionError`. Even if a non-executable binary path
+    is passed to `subprocess.run`, `run_post_hooks` must catch `PermissionError`/`OSError`.
+    """
+    fake_home = tmp_path / "fake_home"
+    local_bin = fake_home / ".local" / "bin"
+    local_bin.mkdir(parents=True)
+    nonexec_bin = local_bin / "graphify"
+    nonexec_bin.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    nonexec_bin.chmod(0o644)
+
+    monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.setenv("PATH", "")
+
+    assert _find_graphify() is None
+
+    target_dir = tmp_path / "project_target"
+    target_dir.mkdir()
+
+    # Real run_post_hooks (no subprocess.run mock) with non-executable home fallback
+    msgs = run_post_hooks(target_dir, init_git=False, run_graphify=True)
+    assert msgs == ["Skipped graphify update (graphify binary not found)"]
+
+    # Even if a non-executable path were returned right before execution, real
+    # subprocess.run PermissionError is handled as a best-effort skip message.
+    with patch("bootstrapper.composer._find_graphify", return_value=str(nonexec_bin)):
+        perm_msgs = run_post_hooks(target_dir, init_git=False, run_graphify=True)
+    assert len(perm_msgs) == 1
+    assert perm_msgs[0].startswith("Skipped graphify update:")

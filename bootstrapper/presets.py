@@ -266,17 +266,41 @@ def resolve_preset(
     )
 
 
+def _has_symlink_component(root: Path, target: Path) -> bool:
+    """Return True if ``root`` or any segment from ``root`` to ``target`` is a symlink."""
+    if root.is_symlink():
+        return True
+    cur = target
+    while cur != root:
+        if cur.is_symlink():
+            return True
+        if cur.parent == cur:
+            break
+        cur = cur.parent
+    return False
+
+
 def _collect_dir_files(directory: Path) -> dict[str, str]:
     out: dict[str, str] = {}
-    if not directory.is_dir():
+    if not directory.is_dir() or directory.is_symlink():
         return out
+    resolved_root = directory.resolve()
     for path in sorted(directory.rglob("*")):
-        if not path.is_file():
+        if _has_symlink_component(directory, path) or not path.is_file():
             continue
         rel_posix = PurePosixPath(path.relative_to(directory).as_posix())
         if _is_forbidden_env_or_hidden(rel_posix):
             continue
-        out[rel_posix.as_posix()] = path.read_text()
+        try:
+            resolved_path = path.resolve(strict=True)
+            resolved_rel = PurePosixPath(
+                resolved_path.relative_to(resolved_root).as_posix()
+            )
+        except (OSError, ValueError):
+            continue
+        if not resolved_path.is_file() or _is_forbidden_env_or_hidden(resolved_rel):
+            continue
+        out[rel_posix.as_posix()] = resolved_path.read_text()
     return out
 
 
