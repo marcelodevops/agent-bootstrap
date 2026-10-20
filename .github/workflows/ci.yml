@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install verification tools
+        run: python -m pip install '.[dev]' twine
+      - name: Test source
+        run: python -m pytest -q -c pyproject.toml tests
+      - name: Build wheel and sdist
+        run: python -m build
+      - name: Validate distributions
+        run: python -m twine check dist/*
+      - name: Verify installed wheel and generated Python project
+        shell: bash
+        run: |
+          python -m venv "$RUNNER_TEMP/wheel-check"
+          "$RUNNER_TEMP/wheel-check/bin/python" -m pip install dist/*.whl
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/wheel-check/bin/agent-bootstrap" --help
+          "$RUNNER_TEMP/wheel-check/bin/projboot" --help
+          "$RUNNER_TEMP/wheel-check/bin/agent-bootstrap" create python-smoke --lang python --no-git --no-graphify
+          python -m venv "$RUNNER_TEMP/generated-check"
+          "$RUNNER_TEMP/generated-check/bin/python" -m pip install ./python-smoke pytest
+          cd "$RUNNER_TEMP/python-smoke"
+          "$RUNNER_TEMP/generated-check/bin/python" -m pytest -q

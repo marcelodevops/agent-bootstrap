@@ -2,6 +2,11 @@ name: TestPyPI candidate
 
 on:
   workflow_dispatch:
+    inputs:
+      reviewed_sha:
+        description: Exact reviewed commit already merged to main
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -11,18 +16,29 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.reviewed_sha }}
+          fetch-depth: 0
+      - name: Require an exact reviewed main revision
+        shell: bash
+        env:
+          REVIEWED_SHA: ${{ inputs.reviewed_sha }}
+        run: |
+          [[ "$REVIEWED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git fetch origin main
+          git merge-base --is-ancestor "$REVIEWED_SHA" FETCH_HEAD
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - name: Install verification tools
         run: python -m pip install '.[dev]' twine
       - name: Test source
-        run: python -m pytest -q
-      - name: Build candidate
+        run: python -m pytest -q -c pyproject.toml tests
+      - name: Build candidate distributions
         run: python -m build
       - name: Validate distributions
         run: python -m twine check dist/*
-      - name: Verify installed wheel outside checkout
+      - name: Verify installed wheel and generated Python project
         shell: bash
         run: |
           python -m venv "$RUNNER_TEMP/wheel-check"
@@ -30,6 +46,11 @@ jobs:
           cd "$RUNNER_TEMP"
           "$RUNNER_TEMP/wheel-check/bin/agent-bootstrap" --help
           "$RUNNER_TEMP/wheel-check/bin/projboot" --help
+          "$RUNNER_TEMP/wheel-check/bin/agent-bootstrap" create python-smoke --lang python --no-git --no-graphify
+          python -m venv "$RUNNER_TEMP/generated-check"
+          "$RUNNER_TEMP/generated-check/bin/python" -m pip install ./python-smoke pytest
+          cd "$RUNNER_TEMP/python-smoke"
+          "$RUNNER_TEMP/generated-check/bin/python" -m pytest -q
       - uses: actions/upload-artifact@v4
         with:
           name: testpypi-dist
