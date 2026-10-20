@@ -548,7 +548,7 @@ def create(
     if remote is not None and remote.lower() not in ("github", "gh"):
         raise typer.BadParameter(f"Unsupported remote {remote!r}. Supported: github")
 
-    _, files = _resolve_options_and_compose(
+    resolved_preset, files = _resolve_options_and_compose(
         lang=lang,
         agent=agent,
         preset=preset,
@@ -588,13 +588,14 @@ def create(
     # checkout here always has a remote URL to wire as origin and commit against.
     connect_url = clone_url if clone else None
 
-    for msg in run_post_hooks(
+    hook_messages = run_post_hooks(
         target,
         init_git=not no_git,
         run_graphify=not no_graphify,
         connect_remote_url=connect_url,
         make_commit=bool(connect_url),
-    ):
+    )
+    for msg in hook_messages:
         typer.echo(f"  * {msg}")
 
     if connect_url:
@@ -602,6 +603,310 @@ def create(
             "Local repo has origin + an initial commit; files were uploaded via the "
             "API, so `git fetch` and reconcile before `git push`."
         )
+
+    _echo_create_summary(
+        name=name,
+        lang=lang,
+        files=files,
+        preset=resolved_preset,
+        remote=remote,
+        create_remote=create_remote,
+        clone=clone,
+        clone_url=clone_url,
+        no_git=no_git,
+        no_graphify=no_graphify,
+        hook_messages=hook_messages,
+    )
+
+
+_AGENT_OVERLAY_EXPECTED_PATHS: dict[str, tuple[str, ...]] = {
+    "claude": ("CLAUDE.md", ".claude/settings.json"),
+    "gh-copilot": (".github/copilot-instructions.md", ".github/prompts/bootstrap.prompt.md"),
+    "codeassistant": (".codeassistant/instructions.md",),
+    "cursor": (".cursor/rules/project.mdc",),
+}
+
+
+def _echo_create_summary(
+    *,
+    name: str,
+    lang: str,
+    files: dict[str, str],
+    preset: PresetConfig,
+    remote: str | None,
+    create_remote: bool,
+    clone: bool,
+    clone_url: str | None,
+    no_git: bool,
+    no_graphify: bool,
+    hook_messages: list[str],
+) -> None:
+    """Print post-generation status, user-runnable first steps, and verification checks.
+
+    Separates what was written/configured on disk, what local/remote hooks
+    actually ran, what commands are next steps for the user, and what remains
+    unverified. Commands are derived from the composed ``files`` so tools or
+    scripts absent from the scaffold are never suggested.
+    """
+    has_python = "pyproject.toml" in files and "src/appstarter/main.py" in files
+    has_typescript = "package.json" in files and "tsconfig.json" in files
+    has_helm = "Chart.yaml" in files
+    has_rails = "Gemfile" in files and "config/application.rb" in files
+    has_graphify = not no_graphify and "graphify-out/.gitkeep" in files
+
+    git_ran_msg = next(
+        (m for m in hook_messages if m.startswith("Initialized git repository")), None
+    )
+    git_skip_msg = next(
+        (m for m in hook_messages if m.startswith("Skipped git init")), None
+    )
+    graphify_ran_msg = next(
+        (
+            m
+            for m in hook_messages
+            if m.startswith("Initialized graphify knowledge graph")
+        ),
+        None,
+    )
+    graphify_skip_msg = next(
+        (m for m in hook_messages if m.startswith("Skipped graphify update")), None
+    )
+    origin_msg = next((m for m in hook_messages if "origin remote:" in m), None)
+    commit_msg = next(
+        (m for m in hook_messages if m == "Created initial commit"), None
+    )
+
+    typer.echo("")
+    typer.echo(f"Generated and configured in {name}/:")
+    if has_python:
+        typer.echo(
+            f"  profile (--lang): {lang} (Python starter package in src/appstarter/; "
+            "starter point, not a production service)"
+        )
+    elif has_typescript:
+        typer.echo(
+            f"  profile (--lang): {lang} (TypeScript Node.js starter with src/index.ts "
+            "and tsconfig.json)"
+        )
+    elif has_helm:
+        typer.echo(
+            f"  profile (--lang): {lang} (Helm v2 chart scaffold with Chart.yaml, "
+            "values.yaml, and templates/)"
+        )
+    elif has_rails:
+        typer.echo(
+            f"  profile (--lang): {lang} (EXPERIMENTAL layout sketch only — NOT a "
+            "runnable Rails app)"
+        )
+    else:
+        typer.echo(
+            f"  profile (--lang): {lang} (minimal agent-only repository; no language "
+            "runtime or build toolchain)"
+        )
+
+    harness_items: list[str] = []
+    if "AGENTS.md" in files:
+        harness_items.append("AGENTS.md")
+    if preset.prompts_file in files:
+        harness_items.append(preset.prompts_file)
+    if any(p.startswith(f"{preset.outputs_dir}/") for p in files):
+        harness_items.append(f"{preset.outputs_dir}/")
+    if any(p.startswith(f"{preset.scripts_dir}/") for p in files):
+        harness_items.append(f"{preset.scripts_dir}/")
+    if any(p.startswith(".remember/") for p in files):
+        harness_items.append(".remember/")
+    if any(p.startswith(".agents/skills/") for p in files):
+        harness_items.append(".agents/skills/")
+    if has_graphify:
+        harness_items.append("graphify-out/.gitkeep (Graphify placeholder only)")
+    else:
+        harness_items.append("Graphify integration not selected (--no-graphify)")
+    typer.echo(f"  shared harness: {', '.join(harness_items)}")
+
+    if preset.agents:
+        overlay_parts: list[str] = []
+        for agent_name in preset.agents:
+            key = agent_name.strip().lower()
+            expected = _AGENT_OVERLAY_EXPECTED_PATHS.get(key, ())
+            present = [p for p in expected if p in files]
+            if present:
+                overlay_parts.append(f"{key} ({', '.join(present)})")
+            else:
+                overlay_parts.append(key)
+        typer.echo(
+            f"  assistant overlays: {', '.join(overlay_parts)} — static files written; "
+            "live assistant client loading not verified"
+        )
+    else:
+        typer.echo(
+            "  assistant overlays: none selected (-a/--agent not set; shared "
+            "AGENTS.md harness only)"
+        )
+
+    typer.echo("Hook & remote status (actual results):")
+    if no_git:
+        typer.echo("  git init: not run (--no-git)")
+    elif git_ran_msg:
+        typer.echo(f"  git init: ran — {git_ran_msg}")
+    elif git_skip_msg:
+        typer.echo(f"  git init: pending / not run — {git_skip_msg}")
+    else:
+        typer.echo("  git init: pending / not run — git init did not report completion")
+
+    if no_graphify:
+        typer.echo("  graphify update .: not selected (--no-graphify)")
+    elif graphify_ran_msg:
+        typer.echo(f"  graphify update .: ran — {graphify_ran_msg}")
+    elif graphify_skip_msg:
+        typer.echo(f"  graphify update .: pending / not run — {graphify_skip_msg}")
+    else:
+        typer.echo(
+            "  graphify update .: pending / not run — graphify update . did not report completion"
+        )
+
+    if create_remote and clone_url:
+        if clone:
+            if origin_msg and commit_msg:
+                typer.echo(
+                    f"  GitHub remote: ran — created {clone_url}, wired origin, and "
+                    "created initial local commit (run git fetch and reconcile before git push)"
+                )
+            else:
+                typer.echo(
+                    f"  GitHub remote: partial / pending — created {clone_url}, "
+                    "but local origin/commit wiring did not complete"
+                )
+        else:
+            typer.echo(
+                f"  GitHub remote: ran — created {clone_url} and uploaded scaffold "
+                "files (--clone not set; local directory is not connected to origin)"
+            )
+    elif remote:
+        typer.echo(
+            f"  GitHub remote: not run (--remote {remote} specified without --create; "
+            "no GitHub API call or verification ran)"
+        )
+    else:
+        typer.echo(
+            "  GitHub remote: not selected (--create not set; no GitHub API call or "
+            "verification ran)"
+        )
+    typer.echo(
+        "  dependencies, build, and tests: not run — projboot never installs "
+        "dependencies, builds code, or runs project tests"
+    )
+
+    typer.echo("First steps (user-run commands — not executed by projboot):")
+    typer.echo(f"  cd {name}  [not executed]")
+    if create_remote and clone_url and clone and origin_msg and commit_msg:
+        typer.echo(
+            "  git fetch origin  # reconcile API-uploaded remote history before "
+            "git push  [not executed]"
+        )
+    if has_python:
+        typer.echo(
+            "  python -m venv .venv && source .venv/bin/activate && pip install -e .  "
+            "[not executed]"
+        )
+        typer.echo("  appstarter  # or: python -m appstarter  [not executed]")
+    elif has_typescript:
+        typer.echo("  npm install  [not executed]")
+        typer.echo("  npm run build  [not executed]")
+        typer.echo("  npm start  [not executed]")
+    elif has_helm:
+        typer.echo(
+            f"  review and customize Chart.yaml and values.yaml (placeholder image "
+            f"ghcr.io/example/{name} is not a live image)  [not executed]"
+        )
+    elif has_rails:
+        typer.echo(
+            "  EXPERIMENTAL layout sketch only — missing config/boot.rb, "
+            "config/environment.rb, config/routes.rb, bin/rails, Rakefile, "
+            "app/views/, and db/; do not run a server expecting this layout to boot. "
+            "Run `rails new` with Ruby >= 3.1 for a runnable Rails app  [not executed]"
+        )
+    else:
+        typer.echo(
+            f"  review AGENTS.md and {preset.prompts_file} to begin agent workflows "
+            "(no language runtime or package manager in this scaffold)  [not executed]"
+        )
+    if has_graphify and not graphify_ran_msg:
+        typer.echo(
+            "  graphify update .  # optional: requires external graphify CLI to "
+            "populate graphify-out/graph.json  [not executed]"
+        )
+
+    typer.echo("User-runnable verification checks (not executed by projboot):")
+    if has_python:
+        if "tests/test_appstarter.py" in files:
+            typer.echo("  pip install pytest && pytest  [not executed]")
+        typer.echo("  pip install build && python -m build  [not executed]")
+    elif has_typescript:
+        typer.echo(
+            "  npm run build  # compiles src/index.ts to dist/index.js via tsc "
+            "(after npm install)  [not executed]"
+        )
+        typer.echo(
+            "  npm start  # runs node dist/index.js (no test runner or test script "
+            "is configured in package.json)  [not executed]"
+        )
+    elif has_helm:
+        typer.echo("  helm lint .  # requires helm CLI on PATH  [not executed]")
+        typer.echo(
+            f"  helm template {name} .  # renders manifests locally without a "
+            "Kubernetes cluster  [not executed]"
+        )
+    elif has_rails:
+        typer.echo(
+            "  ruby -c config/application.rb && ruby -c "
+            "app/controllers/application_controller.rb  # syntax-only check on "
+            "generated files; application boot and test suite are unavailable for "
+            "this experimental layout  [not executed]"
+        )
+    else:
+        typer.echo(
+            f"  no language build, lint, or test checks apply to --lang {lang} "
+            "(no runtime or test runner generated)  [not executed]"
+        )
+
+    typer.echo("Unverified / pending items:")
+    typer.echo(
+        "  dependencies and project checks: not installed, built, or executed by projboot"
+    )
+    if has_rails:
+        typer.echo(
+            "  rails profile: experimental directory sketch only; not a bootable or "
+            "verified Rails application"
+        )
+    if has_helm:
+        typer.echo(
+            "  helm deployment: local chart scaffold only; helm lint/template and "
+            "Kubernetes cluster deployment were not run, and "
+            f"ghcr.io/example/{name} is an unverified placeholder image"
+        )
+    if preset.agents:
+        typer.echo(
+            f"  assistant overlays ({', '.join(preset.agents)}): configuration files "
+            "written; live loading in the native assistant client was not verified"
+        )
+    if not no_git and not git_ran_msg:
+        typer.echo(
+            f"  git repository: pending / not initialized "
+            f"({git_skip_msg or 'git init did not complete'})"
+        )
+    if create_remote and clone_url and clone and not (origin_msg and commit_msg):
+        typer.echo(
+            "  local git remote/commit wiring: pending / incomplete "
+            "(--clone requested, but origin or initial commit did not complete)"
+        )
+    if has_graphify and not graphify_ran_msg:
+        typer.echo(
+            "  graphify knowledge graph: pending / not built (graphify-out/.gitkeep "
+            "is only a placeholder until graphify update . succeeds)"
+        )
+    if not (create_remote and clone_url):
+        typer.echo("  GitHub repository: not created or verified (--create was not run)")
+
 
 
 def _echo_preview(

@@ -16,9 +16,15 @@ Requires Python 3.11+. Local scaffolding needs no token and no network; GitHub r
 
 ---
 
-## Quickstart: AI Agent Project Bootstrapping (`projboot create`)
+## Quickstart: Preview & AI Agent Project Bootstrapping (`projboot preview` / `projboot create`)
 
-Create a new Python project pre-wired for **Claude Code** and **GitHub Copilot**, scaffolded locally and pushed to a new GitHub repository:
+Preview the composed file tree, implied directories, selected integrations, and planned post-generation actions in memory first (no files are written, and no `git`, `graphify`, dependency install, or GitHub calls are executed):
+
+```bash
+projboot preview new-project -l python -a claude -a gh-copilot
+```
+
+Then run `projboot create` with the same arguments to generate the project locally, or pass `-r github --create --clone` to also create a GitHub repository:
 
 ```bash
 projboot create new-project -l python -a claude -a gh-copilot -r github --create --clone
@@ -45,8 +51,8 @@ projboot create new-project \
    - `rails`: **EXPERIMENTAL layout only — not a runnable Rails app.** A partial sketch (`Gemfile`, `config.ru`, `config/application.rb`, one controller); `config/environment.rb`, `config/boot.rb`, `config/routes.rb`, `bin/rails`, `Rakefile`, `app/views/` and `db/` are absent, and `rails` `~> 7.1` additionally needs Ruby >= 3.1 and `bundle install`. Use `rails new` for a verified application
    - `none`: Minimal agent-only repo (`README.md` + `.gitignore`)
 2. **Universal Agent Harness (Always Included)**:
-   - `AGENTS.md`: Project overview, `$arch` rules, directory map (`$outputs_dir/`, `$scripts_dir/`, `$prompts_file`), and `graphify` instructions
-   - `graphify-out/`: Knowledge graph folder (automatically updated via `graphify update .` if `graphify` is installed)
+   - `AGENTS.md`: Project overview, `$arch` rules, directory map (`$outputs_dir/`, `$scripts_dir/`, `$prompts_file`), and conditional `graphify` instructions (omitted when `--no-graphify` is set)
+   - `graphify-out/`: Knowledge graph placeholder (`graphify-out/.gitkeep` unless `--no-graphify` is passed; only populated if the external `graphify` CLI is installed and `graphify update .` succeeds)
    - `.remember/`: Persistent agent memory (`MEMORY.md` & `decisions.md`, or copied from `~/.config/projboot/remember/`)
    - `.agents/skills/`: Reusable project skills (copied from `~/.config/projboot/skills/` or starter `project-conventions/SKILL.md`)
    - `$prompts_file` (default `PROMPTS.md`): Ordered prompt catalog
@@ -57,6 +63,24 @@ projboot create new-project \
    - `-a codeassistant`: `.codeassistant/instructions.md` (custom/legacy instruction-file adapter kept for compatibility; does not claim undocumented native client auto-loading)
    - `-a cursor`: `.cursor/rules/project.mdc` (YAML frontmatter with quoted `globs` and `alwaysApply: true`)
    - *Verification scope*: automated tests verify static format decoding (JSON and YAML frontmatter parsing) of generated overlay files; live native client behavior must be verified in the respective assistant client.
+
+### Post-Generation Summary, First Steps & User-Run Checks
+
+`projboot create` never installs dependencies, builds or runs generated code, or executes project test suites automatically. After writing the scaffold, it prints a summary separating:
+- **Generated and configured files**: the selected `--lang` profile, composed harness paths, and assistant overlays.
+- **Hook & remote status (actual results)**: whether `git init -b main` and `graphify update .` actually ran or remain `pending / not run` (missing tools or skipped hooks are never reported as success), and whether `--create` ran against GitHub.
+- **First steps & user-runnable verification checks (not executed by `projboot`)**:
+  - `python` / `python-microservice`:
+    - Setup & run: `cd <name> && python -m venv .venv && source .venv/bin/activate && pip install -e . && appstarter` (or `python -m appstarter`)
+    - User-run checks: `pip install pytest && pytest` and `pip install build && python -m build`
+  - `typescript`:
+    - Setup, build & run: `cd <name> && npm install && npm run build && npm start` (no test runner or `test` script is pre-configured in `package.json`)
+  - `helm-chart`:
+    - User-run checks: `cd <name> && helm lint . && helm template <name> .` (local chart validation only; cluster deployment is not configured and `ghcr.io/example/<name>` in `values.yaml` is a placeholder image)
+  - `rails` (**experimental layout sketch only — not a runnable Rails app**):
+    - User-run syntax check on generated files only: `cd <name> && ruby -c config/application.rb && ruby -c app/controllers/application_controller.rb` (use `rails new` with Ruby >= 3.1 for a runnable application)
+  - `none`:
+    - Agent harness only (`AGENTS.md`, `PROMPTS.md`, `.remember/`, `.agents/skills/`); no language runtime, build, or test commands apply.
 
 ---
 
