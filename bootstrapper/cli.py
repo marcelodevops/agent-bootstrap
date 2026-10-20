@@ -7,7 +7,7 @@ import os
 import re
 import shutil
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import typer
 
@@ -20,6 +20,7 @@ from .composer import (
     run_post_hooks,
 )
 from .presets import (
+    PresetConfig,
     get_config_dir,
     init_config_dir,
     load_presets,
@@ -218,8 +219,23 @@ def _reject_existing_fs_conflicts(rroot: Path, planned: list[tuple[str, str, Pat
             )
 
 
-def _write_local(target: Path, files: dict[str, str], force: bool) -> None:
-    nonempty_existing = target.is_dir() and any(target.iterdir())
+def _is_nonempty_dir(target: Path) -> bool:
+    return target.is_dir() and any(target.iterdir())
+
+
+def _validate_write_plan(
+    target: Path, files: dict[str, str], force: bool
+) -> tuple[list[tuple[str, str, Path]], bool]:
+    """Run every read-only check generation performs before its first write.
+
+    Returns the planned ``(rel, content, resolved destination)`` triples plus
+    the non-empty snapshot taken at preflight, so the caller's write-path choice
+    stays tied to this single observation rather than a second one. Exits
+    exactly like ``_write_local`` on refusal or collisions. It only reads
+    (``resolve``/``exists``/``iterdir``), so ``preview`` can reuse it to fail on
+    the same invalid inputs and output collisions as ``create``.
+    """
+    nonempty_existing = _is_nonempty_dir(target)
     if nonempty_existing and not force:
         typer.echo(f"Refusing to overwrite non-empty dir {target}/ (use --force)", err=True)
         raise typer.Exit(code=1)
@@ -239,7 +255,11 @@ def _write_local(target: Path, files: dict[str, str], force: bool) -> None:
     except ValueError as exc:
         typer.echo(f"Invalid output path: {exc}", err=True)
         raise typer.Exit(code=1) from exc
+    return planned, nonempty_existing
 
+
+def _write_local(target: Path, files: dict[str, str], force: bool) -> None:
+    planned, nonempty_existing = _validate_write_plan(target, files, force)
     if nonempty_existing:
         # Forced merge into an existing tree: unrelated files must survive, so an
         # atomic whole-directory swap is impossible. Write in place after the
@@ -258,6 +278,7 @@ def _write_local(target: Path, files: dict[str, str], force: bool) -> None:
     # New (or empty) target: stage the complete scaffold in a temporary sibling
     # and rename it into place only after every file is written. A failure partway
     # removes just our staging directory and leaves the requested target absent.
+    rroot = target.resolve()
     parent = rroot.parent if rroot.parent != rroot else Path.cwd()
     staging = Path(tempfile.mkdtemp(prefix=f"{_TMP_PREFIX}{rroot.name}.", dir=parent))
     try:
@@ -379,6 +400,53 @@ def _tree_to_files(tree_file: Path, gitkeep: bool) -> dict[str, str]:
     return files
 
 
+def _resolve_options_and_compose(
+    *,
+    lang: str,
+    agent: list[str],
+    preset: str,
+    arch: str | None,
+    outputs_dir: str | None,
+    scripts_dir: str | None,
+    prompts_file: str | None,
+    name: str,
+    description: str,
+    license: str,
+    holder: str,
+    variable: list[str],
+    no_graphify: bool,
+) -> tuple[PresetConfig, dict[str, str]]:
+    """Resolve preset options and compose the full file plan, or refuse.
+
+    ``create`` and ``preview`` both call this, so a preview is built from the
+    exact same resolved options and composition result as generation.
+    """
+    try:
+        resolved_preset = resolve_preset(
+            preset,
+            arch=arch,
+            outputs_dir=outputs_dir,
+            scripts_dir=scripts_dir,
+            prompts_file=prompts_file,
+            agents=agent,
+        )
+        files = compose_project_files(
+            name=name,
+            description=description,
+            lang=lang,
+            preset=resolved_preset,
+            license=license,
+            holder=holder,
+            extra_vars=_parse_vars(variable),
+            include_graphify=not no_graphify,
+        )
+    except KeyError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    return resolved_preset, files
+
+
 @app.command("list-templates")
 def list_templates() -> None:
     """Show available templates and their descriptions."""
@@ -480,29 +548,21 @@ def create(
     if remote is not None and remote.lower() not in ("github", "gh"):
         raise typer.BadParameter(f"Unsupported remote {remote!r}. Supported: github")
 
-    try:
-        resolved_preset = resolve_preset(
-            preset,
-            arch=arch,
-            outputs_dir=outputs_dir,
-            scripts_dir=scripts_dir,
-            prompts_file=prompts_file,
-            agents=agent,
-        )
-        files = compose_project_files(
-            name=name,
-            description=description,
-            lang=lang,
-            preset=resolved_preset,
-            license=license,
-            holder=holder,
-            extra_vars=_parse_vars(variable),
-            include_graphify=not no_graphify,
-        )
-    except KeyError as exc:
-        raise typer.BadParameter(str(exc)) from exc
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from exc
+    _, files = _resolve_options_and_compose(
+        lang=lang,
+        agent=agent,
+        preset=preset,
+        arch=arch,
+        outputs_dir=outputs_dir,
+        scripts_dir=scripts_dir,
+        prompts_file=prompts_file,
+        name=name,
+        description=description,
+        license=license,
+        holder=holder,
+        variable=variable,
+        no_graphify=no_graphify,
+    )
 
     target = Path(name)
     _write_local(target, files, force)
@@ -542,6 +602,241 @@ def create(
             "Local repo has origin + an initial commit; files were uploaded via the "
             "API, so `git fetch` and reconcile before `git push`."
         )
+
+
+def _echo_preview(
+    *,
+    name: str,
+    lang: str,
+    files: dict[str, str],
+    preset: PresetConfig,
+    license: str,
+    remote: str | None,
+    create_remote: bool,
+    clone: bool,
+    private: bool,
+    org: str | None,
+    no_git: bool,
+    no_graphify: bool,
+) -> None:
+    """Print the composition result without writing files or running anything.
+
+    Every line is a description of what `create` would do for these arguments:
+    selected actions are marked "not executed by preview" and external
+    requirements are marked "NOT CHECKED", so a selection never reads as a
+    verified success.
+    """
+    paths = sorted(files)
+    total_bytes = sum(len(content.encode()) for content in files.values())
+    dirs: dict[str, None] = {}
+    for rel in paths:
+        for ancestor in PurePosixPath(rel).parents:
+            if ancestor.as_posix() != ".":
+                dirs.setdefault(ancestor.as_posix(), None)
+
+    def integration_selected(prefix: str) -> bool:
+        return any(p.startswith(prefix) for p in paths)
+
+    typer.echo(
+        f"PREVIEW `create {name}`: {len(paths)} file(s), {total_bytes} bytes "
+        "composed in memory. Nothing was written; no git, Graphify, GitHub, "
+        "network, or install step was run."
+    )
+    typer.echo("")
+    typer.echo(f"Files that `create` would write to {name}/ ({len(paths)}):")
+    for rel in paths:
+        typer.echo(f"  {rel}")
+    typer.echo(f"Directories implied by that layout ({len(dirs)}):")
+    for d in dirs:
+        typer.echo(f"  {d}/")
+    typer.echo("Selected tools and integrations:")
+    typer.echo(f"  base template (--lang): {lang}")
+    typer.echo(
+        f"  preset: {preset.name} (arch={preset.arch}, "
+        f"outputs={preset.outputs_dir}/, scripts={preset.scripts_dir}/, "
+        f"prompts={preset.prompts_file})"
+    )
+    typer.echo(f"  agents: {', '.join(preset.agents) if preset.agents else 'none'}")
+    typer.echo(
+        f"  license: {license} "
+        f"({'LICENSE file selected' if 'LICENSE' in files else 'no LICENSE composed'})"
+    )
+    typer.echo(
+        f"  graphify scaffolding (graphify-out/): "
+        f"{'selected' if integration_selected('graphify-out/') else 'not selected (--no-graphify)'}"
+    )
+    typer.echo(
+        f"  memory files (.remember/): "
+        f"{'selected' if integration_selected('.remember/') else 'not selected'}"
+    )
+    typer.echo(
+        f"  project skills (.agents/skills/): "
+        f"{'selected' if integration_selected('.agents/skills/') else 'not selected'}"
+    )
+    typer.echo("Post-generation actions (selected by flags; preview executes none):")
+    typer.echo("  write scaffold to disk: selected for `create` — not executed by preview")
+    typer.echo(
+        f"  git init -b main: {'selected' if not no_git else 'not selected (--no-git)'}"
+        " — not executed by preview"
+    )
+    if not no_graphify:
+        typer.echo(
+            "  graphify update .: selected — not executed by preview; requirement "
+            "`graphify` CLI available on PATH: NOT CHECKED by preview"
+        )
+    else:
+        typer.echo(
+            "  graphify update .: not selected (--no-graphify) — would not run on create"
+        )
+    if create_remote:
+        visibility = "private" if private else "public"
+        typer.echo(
+            f"  create GitHub repository ({visibility}): selected (--create) — not "
+            "executed by preview; requirement GitHub credentials + network access: "
+            "NOT CHECKED by preview"
+        )
+        if org:
+            typer.echo(f"  GitHub organization (--org): {org}")
+        else:
+            typer.echo(
+                "  GitHub organization (--org): not specified; authenticated owner "
+                "NOT CHECKED or resolved by preview"
+            )
+        if clone:
+            typer.echo(
+                "  connect checkout (origin + initial commit): selected (--clone) — "
+                "not executed by preview"
+            )
+        else:
+            typer.echo(
+                "  connect checkout (--clone): not selected — `create` would not wire origin"
+            )
+    else:
+        typer.echo(
+            "  create GitHub repository: not selected (--create not set) — `create` "
+            "would not touch GitHub"
+        )
+        if remote:
+            typer.echo(
+                f"  remote '{remote}' named without --create: informational only; "
+                "no upload would run"
+            )
+    typer.echo(
+        "  dependency installation: not selected — projboot never installs "
+        "dependencies; not executed by preview"
+    )
+    typer.echo("")
+    typer.echo(
+        "Selected/required lines above are descriptions, not verifications: a "
+        "requirement is only proven by running `create` and its checks. Re-run "
+        f"these same arguments with `create {name}` to execute."
+    )
+
+
+@app.command()
+def preview(
+    name: str = typer.Argument(..., help="Project/repository name"),
+    lang: str = typer.Option(
+        "python",
+        "--lang",
+        "-l",
+        help="Language/base template (python, python-microservice, typescript, rails, helm-chart, none)",
+    ),
+    agent: list[str] = typer.Option(
+        [],
+        "--agent",
+        "-a",
+        help=f"AI assistant overlay (repeatable): {', '.join(SUPPORTED_AGENTS)}",
+    ),
+    preset: str = typer.Option(
+        "default",
+        "--preset",
+        "-p",
+        help="Workflow preset name (see list-presets)",
+    ),
+    arch: str | None = typer.Option(
+        None, "--arch", help="Override architecture style in agent instructions"
+    ),
+    outputs_dir: str | None = typer.Option(
+        None, "--outputs-dir", help="Override directory for generated outputs"
+    ),
+    scripts_dir: str | None = typer.Option(
+        None, "--scripts-dir", help="Override directory for helper scripts"
+    ),
+    prompts_file: str | None = typer.Option(
+        None, "--prompts-file", help="Override ordered prompts catalog file path"
+    ),
+    remote: str | None = typer.Option(
+        None, "--remote", "-r", help="Remote provider (e.g. 'github')"
+    ),
+    create_remote: bool = typer.Option(
+        False, "--create", help="Show whether `create` would create the remote repository"
+    ),
+    clone: bool = typer.Option(
+        False, "--clone", help="Show whether `create` would keep a connected local checkout"
+    ),
+    description: str = typer.Option("", help="Short project description"),
+    private: bool = typer.Option(True, help="Make the remote repository private"),
+    org: str | None = typer.Option(None, help="GitHub organization"),
+    license: str = typer.Option("none", help="License: mit/apache2/gpl3/none"),
+    holder: str = typer.Option("", help="Copyright holder for the license"),
+    variable: list[str] = typer.Option(
+        [], "--var", "-V", help="Extra template variable as key=value (repeatable)"
+    ),
+    no_git: bool = typer.Option(
+        False, "--no-git", help="Show `create` without `git init`"
+    ),
+    no_graphify: bool = typer.Option(
+        False, "--no-graphify", help="Show `create` without `graphify update .`"
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="Preview a merge into a non-empty local target directory"
+    ),
+) -> None:
+    """Show the composed project layout, selected integrations, and requested
+    post-generation actions for `create` — without writing files or running anything."""
+    _validate_name(name)
+    _reject_contradictory_options(
+        clone=clone, create_remote=create_remote, no_git=no_git
+    )
+
+    if remote is not None and remote.lower() not in ("github", "gh"):
+        raise typer.BadParameter(f"Unsupported remote {remote!r}. Supported: github")
+
+    resolved_preset, files = _resolve_options_and_compose(
+        lang=lang,
+        agent=agent,
+        preset=preset,
+        arch=arch,
+        outputs_dir=outputs_dir,
+        scripts_dir=scripts_dir,
+        prompts_file=prompts_file,
+        name=name,
+        description=description,
+        license=license,
+        holder=holder,
+        variable=variable,
+        no_graphify=no_graphify,
+    )
+
+    # Fail on exactly the collisions/refusals `create` would hit, before the
+    # preview claims anything. Read-only, like the rest of this command.
+    _validate_write_plan(Path(name), files, force)
+
+    _echo_preview(
+        name=name,
+        lang=lang,
+        files=files,
+        preset=resolved_preset,
+        license=license,
+        remote=remote,
+        create_remote=create_remote,
+        clone=clone,
+        private=private,
+        org=org,
+        no_git=no_git,
+        no_graphify=no_graphify,
+    )
 
 
 @app.command()
