@@ -23,15 +23,25 @@ Requires Python 3.11+. Local scaffolding needs no token and no network; GitHub r
 
 ---
 
-## Quickstart: AI Agent Project Bootstrapping (`projboot create`)
+## Quickstart: Preview & AI Agent Project Bootstrapping (`projboot preview` / `projboot create`)
 
-### 1. Initialize your personal `~/.config/projboot/` presets & skills store
+### 1. Initialize your personal presets and skills store
+
 ```bash
 projboot config-init
 projboot list-presets
 ```
 
-### 2. Create a local AI-agent Python project with Claude + GitHub Copilot + custom folders
+### 2. Preview the composed file tree and planned actions
+
+Preview runs in memory. It does not write files, run `git` or Graphify, install dependencies, or access GitHub.
+
+```bash
+projboot preview demo-agent -l python -a claude -a gh-copilot
+```
+
+### 3. Create a local AI-agent project
+
 ```bash
 projboot create demo-agent \
   -l python \
@@ -42,80 +52,55 @@ projboot create demo-agent \
   --prompts-file PROMPTS.md
 ```
 
-### 3. Create locally AND push to a new GitHub repo (requires `GITHUB_TOKEN`)
+### 4. Create a GitHub repository and push one Git history
+
+With `GITHUB_TOKEN` set, `--create` connects the local checkout and pushes its initial commit. `--clone` is retained as a compatibility flag and is not required.
+
 ```bash
-projboot create new-project -l python -a claude -a gh-copilot -r github --create --clone
+projboot create new-project -l python -a claude -a gh-copilot -r github --create
 ```
 
-### Example Generated Project Layout
-
-```text
-demo-agent/
-├── AGENTS.md                                    # Universal instructions + Graphify rules + layout map
-├── CLAUDE.md                                    # Claude Code instructions (-a claude)
-├── PROMPTS.md                                   # Ordered prompts catalog (--prompts-file)
-├── .claude/
-│   └── settings.json                            # Claude Code project settings (-a claude)
-├── .github/
-│   ├── copilot-instructions.md                  # GitHub Copilot instructions (-a gh-copilot)
-│   ├── prompts/bootstrap.prompt.md              # Copilot reusable prompt (-a gh-copilot)
-│   └── workflows/ci.yml                         # Base language CI (-l python)
-├── .agents/
-│   └── skills/project-conventions/SKILL.md      # Project skills (from ~/.config/projboot/skills/)
-├── .remember/
-│   ├── MEMORY.md                                # Persistent agent memory
-│   └── decisions.md                             # Architectural decisions log
-├── graphify-out/                                # Knowledge graph (auto-updated via `graphify update .`)
-├── artifacts/out/                               # Custom outputs folder (--outputs-dir)
-├── hack/                                        # Custom scripts folder (--scripts-dir)
-├── pyproject.toml
-├── Dockerfile
-└── src/
-    └── main.py
-```
-
-### `projboot create` Options
-
-| Flag | Default | Description |
-|---|---|---|
-| `<name>` | *(required)* | Target directory and repository name |
-| `-l`, `--lang` | `python` | Base template: `python`, `python-microservice`, `typescript`, `rails`, `helm-chart`, `none` |
-| `-a`, `--agent` | *(from preset)* | Repeatable assistant overlay: `claude`, `gh-copilot`, `codeassistant`, `cursor` |
-| `-p`, `--preset` | `default` | Workflow preset name from `~/.config/projboot/presets.toml` (see `projboot list-presets`) |
-| `--arch` | `modular` | Architecture style wired into agent instructions |
-| `--outputs-dir` | `outputs` | Directory created and wired for generated artifacts/outputs |
-| `--scripts-dir` | `scripts` | Directory created and wired for helper/automation scripts |
-| `--prompts-file` | `PROMPTS.md` | File created and wired for ordered project prompts |
-| `-r`, `--remote` | `None` | Remote provider (`github` / `gh`) |
-| `--create` | `False` | Create the remote repository on GitHub and push all scaffolded files |
-| `--clone` | `False` | Keep local working directory initialized alongside remote creation |
-| `--license` | `none` | License: `mit`, `apache2`, `gpl3`, `none` |
-| `--holder` | `<name>` | Copyright holder for `LICENSE` |
-| `-V`, `--var` | `[]` | Extra template variable as `key=value` (repeatable) |
-| `--no-git` | `False` | Skip running `git init -b main` locally |
-| `--no-graphify` | `False` | Skip running `graphify update .` locally |
-| `--force` | `False` | Overwrite a non-empty local target directory |
+With `--no-git`, the repository is created or selected without pushing; its existing contents are not inspected. `--force` allows selecting an existing repository, but the normal push never rewrites remote history.
 
 ### What `projboot create` Generates
 
 1. **Base Language Stack (`-l / --lang`)**:
-   - `python` / `python-microservice`: `src/` layout, `pyproject.toml`, `Dockerfile`, GitHub CI
+   - `python` / `python-microservice`: installable **starter** (not a production microservice) — `src/appstarter/` package with both documented run paths (the `appstarter` console script and `python -m appstarter`), `tests/`, `pyproject.toml`, `Dockerfile`, GitHub CI running `pytest` + `python -m build`. The import package is deliberately named `appstarter` regardless of the project name, so hyphenated identities like `my-app` still yield a stable `import appstarter`
    - `typescript`: `package.json`, `tsconfig.json`, `src/index.ts`, multi-stage `Dockerfile`
    - `helm-chart`: `Chart.yaml`, `values.yaml`, `templates/`, `helm lint` CI
-   - `rails`: Minimal Rails skeleton
+   - `rails`: **EXPERIMENTAL layout only — not a runnable Rails app.** A partial sketch (`Gemfile`, `config.ru`, `config/application.rb`, one controller); `config/environment.rb`, `config/boot.rb`, `config/routes.rb`, `bin/rails`, `Rakefile`, `app/views/` and `db/` are absent, and `rails` `~> 7.1` additionally needs Ruby >= 3.1 and `bundle install`. Use `rails new` for a verified application
    - `none`: Minimal agent-only repo (`README.md` + `.gitignore`)
 2. **Universal Agent Harness (Always Included)**:
-   - `AGENTS.md`: Project overview, `$arch` rules, directory map (`$outputs_dir/`, `$scripts_dir/`, `$prompts_file`), and `graphify` instructions
-   - `graphify-out/`: Knowledge graph folder (automatically updated via `graphify update .` if `graphify` is installed)
+   - `AGENTS.md`: Project overview, `$arch` rules, directory map (`$outputs_dir/`, `$scripts_dir/`, `$prompts_file`), and conditional `graphify` instructions (omitted when `--no-graphify` is set)
+   - `graphify-out/`: Knowledge graph placeholder (`graphify-out/.gitkeep` unless `--no-graphify` is passed; only populated if the external `graphify` CLI is installed and `graphify update .` succeeds)
    - `.remember/`: Persistent agent memory (`MEMORY.md` & `decisions.md`, or copied from `~/.config/projboot/remember/`)
    - `.agents/skills/`: Reusable project skills (copied from `~/.config/projboot/skills/` or starter `project-conventions/SKILL.md`)
    - `$prompts_file` (default `PROMPTS.md`): Ordered prompt catalog
    - `$outputs_dir/` & `$scripts_dir/` directories
 3. **Assistant Overlays (`-a / --agent`, repeatable)**:
-   - `-a claude`: `CLAUDE.md` + `.claude/settings.json`
+   - `-a claude`: `CLAUDE.md` (project conventions and `@AGENTS.md` / `@.remember/MEMORY.md` references) + `.claude/settings.json` (minimal valid `{}` JSON settings file; project conventions live in `CLAUDE.md` and `AGENTS.md` rather than unsupported settings keys)
    - `-a gh-copilot`: `.github/copilot-instructions.md` + `.github/prompts/bootstrap.prompt.md`
-   - `-a codeassistant`: `.codeassistant/instructions.md`
-   - `-a cursor`: `.cursor/rules/project.mdc`
+   - `-a codeassistant`: `.codeassistant/instructions.md` (custom/legacy instruction-file adapter kept for compatibility; does not claim undocumented native client auto-loading)
+   - `-a cursor`: `.cursor/rules/project.mdc` (YAML frontmatter with quoted `globs` and `alwaysApply: true`)
+   - *Verification scope*: automated tests verify static format decoding (JSON and YAML frontmatter parsing) of generated overlay files; live native client behavior must be verified in the respective assistant client.
+
+### Post-Generation Summary, First Steps & User-Run Checks
+
+`projboot create` never installs dependencies, builds or runs generated code, or executes project test suites automatically. After writing the scaffold, it prints a summary separating:
+- **Generated and configured files**: the selected `--lang` profile, composed harness paths, and assistant overlays.
+- **Hook & remote status (actual results)**: whether `git init -b main` and `graphify update .` actually ran or remain `pending / not run` (missing tools or skipped hooks are never reported as success), and whether `--create` ran against GitHub.
+- **First steps & user-runnable verification checks (not executed by `projboot`)**:
+  - `python` / `python-microservice`:
+    - Setup & run: `cd <name> && python -m venv .venv && source .venv/bin/activate && pip install -e . && appstarter` (or `python -m appstarter`)
+    - User-run checks: `pip install pytest && pytest` and `pip install build && python -m build`
+  - `typescript`:
+    - Setup, build & run: `cd <name> && npm install && npm run build && npm start` (no test runner or `test` script is pre-configured in `package.json`)
+  - `helm-chart`:
+    - User-run checks: `cd <name> && helm lint . && helm template <name> .` (local chart validation only; cluster deployment is not configured and `ghcr.io/example/<name>` in `values.yaml` is a placeholder image)
+  - `rails` (**experimental layout sketch only — not a runnable Rails app**):
+    - User-run syntax check on generated files only: `cd <name> && ruby -c config/application.rb && ruby -c app/controllers/application_controller.rb` (use `rails new` with Ruby >= 3.1 for a runnable application)
+  - `none`:
+    - Agent harness only (`AGENTS.md`, `PROMPTS.md`, `.remember/`, `.agents/skills/`); no language runtime, build, or test commands apply.
 
 ---
 

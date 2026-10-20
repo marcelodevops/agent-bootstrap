@@ -12,35 +12,122 @@ body needs a literal ``$name``-looking token, escape it as ``$$``.
 
 from __future__ import annotations
 
+import json
+import re
+import unicodedata
 from string import Template
 
 # name -> {metadata, files: {path: template_body}}
 TEMPLATES: dict[str, dict] = {
     "python-microservice": {
         "name": "python-microservice",
-        "description": "Python service with Dockerfile, CI, and src layout",
+        "description": (
+            "Python starter package (src layout, tests, Dockerfile, CI); "
+            "a starting point, not a production microservice"
+        ),
         "files": {
-            "README.md": "# $name\n\n$description\n",
-            ".gitignore": "__pycache__/\n*.py[cod]\n.env\n.venv/\n",
+            "README.md": (
+                "# $name\n\n"
+                "$description\n\n"
+                "## Quickstart\n\n"
+                "```bash\n"
+                "python -m venv .venv && source .venv/bin/activate\n"
+                "pip install -e .\n"
+                "appstarter          # installed entrypoint\n"
+                "python -m appstarter\n"
+                "```\n\n"
+                "## Test and build\n\n"
+                "```bash\n"
+                "pip install pytest\n"
+                "pytest\n"
+                "pip install build && python -m build\n"
+                "```\n\n"
+                "## Layout\n\n"
+                "`src/appstarter/` is the import package and keeps the name "
+                "`appstarter` regardless of the project or distribution name, so "
+                "`import appstarter` and the `appstarter` command stay stable even "
+                "for hyphenated identities like `$name`. `__main__.py` is what makes "
+                "the documented `python -m appstarter` work. `src/main.py` is a thin "
+                "compatibility shim for `python src/main.py`.\n"
+            ),
+            ".gitignore": (
+                "__pycache__/\n"
+                "*.py[cod]\n"
+                ".venv/\n"
+                "# protect real secrets, keep every shareable template tracked\n"
+                ".env\n"
+                ".env.*\n"
+                "!.env.example\n"
+                "!.env.sample\n"
+                "!.env.template\n"
+                "dist/\n"
+                "build/\n"
+                "*.egg-info/\n"
+            ),
             "pyproject.toml": (
                 "[project]\n"
                 'name = "$name"\n'
                 'version = "0.1.0"\n'
-                'description = "$description"\n'
+                'description = $description_json\n'
                 'requires-python = ">=3.11"\n\n'
+                "[project.scripts]\n"
+                'appstarter = "appstarter.main:main"\n\n'
                 "[build-system]\n"
                 'requires = ["setuptools>=61"]\n'
-                'build-backend = "setuptools.build_meta"\n'
+                'build-backend = "setuptools.build_meta"\n\n'
+                "[tool.setuptools]\n"
+                'packages = ["appstarter"]\n\n'
+                "[tool.setuptools.package-dir]\n"
+                '"" = "src"\n\n'
+                "[tool.pytest.ini_options]\n"
+                'testpaths = ["tests"]\n'
+                'pythonpath = ["src"]\n'
             ),
-            "src/main.py": (
-                '"""$name entrypoint."""\n\n\n'
+            "src/appstarter/__init__.py": (
+                '"""Stable import package for $name."""\n\n'
+                'from appstarter.main import main\n\n'
+                '__all__ = ["main"]\n'
+            ),
+            "src/appstarter/main.py": (
+                '"""Entry point for $name."""\n\n\n'
                 "def main() -> None:\n"
                 "    print('Hello from $name!')\n\n\n"
                 'if __name__ == "__main__":\n'
                 "    main()\n"
             ),
+            # Without this module `python -m appstarter` fails with
+            # "No module named appstarter.__main__", so the README would document
+            # a command the built artifact does not support.
+            "src/appstarter/__main__.py": (
+                '"""Module entry point for `python -m appstarter`."""\n\n'
+                "from appstarter.main import main\n\n"
+                'if __name__ == "__main__":\n'
+                "    main()\n"
+            ),
+            # Compatibility shim: `python src/main.py` keeps working for existing
+            # invocations, but the package above is the real, installable module.
+            "src/main.py": (
+                '"""Compatibility shim; the package lives in src/appstarter/."""\n\n'
+                "from appstarter.main import main\n\n"
+                'if __name__ == "__main__":\n'
+                "    main()\n"
+            ),
+            "tests/test_appstarter.py": (
+                "from appstarter import main\n"
+                "from appstarter.main import main as entry\n\n\n"
+                "def test_main_runs(capsys):\n"
+                "    main()\n"
+                "    assert 'Hello from $name!' in capsys.readouterr().out\n\n\n"
+                "def test_entry_point_is_importable():\n"
+                "    assert entry is main\n"
+            ),
+            ".env.example": (
+                "# Copy to .env and fill in real values. .env itself is ignored.\n"
+                "APP_NAME=$name\n"
+            ),
             "requirements.txt": (
                 "# Runtime dependencies, one per line (pip install -r requirements.txt).\n"
+                "# The project itself is installed with `pip install .` (see pyproject.toml).\n"
             ),
             "Dockerfile": (
                 "FROM python:3.11-slim\n"
@@ -48,7 +135,8 @@ TEMPLATES: dict[str, dict] = {
                 "COPY requirements.txt ./\n"
                 "RUN pip install --no-cache-dir -r requirements.txt\n"
                 "COPY . .\n"
-                'CMD ["python", "src/main.py"]\n'
+                "RUN pip install .\n"
+                'CMD ["appstarter"]\n'
             ),
             ".github/workflows/ci.yml": (
                 "name: CI\n"
@@ -61,7 +149,9 @@ TEMPLATES: dict[str, dict] = {
                 "      - uses: actions/setup-python@v5\n"
                 "        with:\n"
                 "          python-version: '3.11'\n"
-                "      - run: python src/main.py\n"
+                "      - run: pip install . pytest\n"
+                "      - run: pytest\n"
+                "      - run: pip install build && python -m build\n"
             ),
         },
     },
@@ -71,8 +161,8 @@ TEMPLATES: dict[str, dict] = {
         "files": {
             "Chart.yaml": (
                 'apiVersion: v2\n'
-                'name: $name\n'
-                'description: $description\n'
+                'name: $helm_name\n'
+                'description: $description_json\n'
                 'type: application\n'
                 'version: 0.1.0\n'
                 'appVersion: "1.0.0"\n'
@@ -99,9 +189,9 @@ TEMPLATES: dict[str, dict] = {
                 "{{- end }}\n\n"
                 '{{- define "$name.fullname" -}}\n'
                 "{{- if .Values.fullnameOverride }}\n"
-                '{{ .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}\n'
+                '{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}\n'
                 "{{- else }}\n"
-                '{{ printf "%s" .Chart.Name | trunc 63 | trimSuffix "-" }}\n'
+                '{{- printf "%s" .Chart.Name | trunc 63 | trimSuffix "-" }}\n'
                 "{{- end }}\n"
                 "{{- end }}\n\n"
                 '{{- define "$name.selectorLabels" -}}\n'
@@ -136,7 +226,7 @@ TEMPLATES: dict[str, dict] = {
                 "    spec:\n"
                 "      containers:\n"
                 "        - name: $name\n"
-                "          image: \"{{ .Values.image.repository }}:{{ .Values.image.tag }}\"\n"
+                "          image: \"{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}\"\n"
             ),
             "templates/service.yaml": (
                 "apiVersion: v1\n"
@@ -167,9 +257,27 @@ TEMPLATES: dict[str, dict] = {
     },
     "rails": {
         "name": "rails",
-        "description": "Minimal Rails-style skeleton (base layout, not `rails new` output)",
+        "description": (
+            "EXPERIMENTAL Rails-style layout only (not runnable, not `rails new` output)"
+        ),
         "files": {
-            "README.md": "# $name\n\n$description\n",
+            "README.md": (
+                "# $name\n\n"
+                "$description\n\n"
+                "## Status: experimental layout, not a runnable Rails app\n\n"
+                "This profile is a partial directory sketch. It does **not** run: "
+                "`config.ru` boots via `rails server` only after the missing files "
+                "below exist, and this skeleton was never executed or verified as a "
+                "bootable Rails application.\n\n"
+                "### Missing preparation\n\n"
+                "- `config/environment.rb` (required by `config.ru`) and "
+                "`config/boot.rb`, `config/routes.rb`\n"
+                "- `bin/rails`, `Rakefile`, `app/views/`, `db/`\n"
+                "- Ruby >= 3.1 for `rails` `~> 7.1` (older system Ruby cannot run it)\n"
+                "- `bundle install` for the Gemfile dependencies\n\n"
+                "To get a verified Rails app, run `rails new` with a supported Ruby "
+                "instead of relying on this layout.\n"
+            ),
             "Gemfile": (
                 "source \"https://rubygems.org\"\n"
                 "gem \"rails\", \"~> 7.1\"\n"
@@ -178,10 +286,15 @@ TEMPLATES: dict[str, dict] = {
             "config.ru": (
                 "require_relative \"config/environment\"\n"
                 "run Rails.application\n"
+                "Rails.application.load_server\n"
             ),
             "config/application.rb": (
                 "require \"rails/all\"\n\n"
-                "module $name\n"
+                "# Stable module identifier. It must be a Ruby CONSTANT, so the\n"
+                "# project name is not interpolated here: a hyphenated identity\n"
+                "# such as \"$name\" is invalid as a module name and broke\n"
+                "# `ruby -c`. Rename deliberately if you regenerate this app.\n"
+                "module AppStarter\n"
                 "  class Application < Rails::Application\n"
                 "    config.load_defaults 7.1\n"
                 "  end\n"
@@ -198,11 +311,12 @@ TEMPLATES: dict[str, dict] = {
         "description": "TypeScript service with package.json, tsconfig, multi-stage Dockerfile",
         "files": {
             "README.md": "# $name\n\n$description\n",
+            ".gitignore": "node_modules/\ndist/\n",
             "package.json": (
                 "{\n"
                 "  \"name\": \"$name\",\n"
                 "  \"version\": \"0.1.0\",\n"
-                "  \"description\": \"$description\",\n"
+                "  \"description\": $description_json,\n"
                 "  \"scripts\": {\n"
                 "    \"build\": \"tsc\",\n"
                 "    \"start\": \"node dist/index.js\"\n"
@@ -217,6 +331,8 @@ TEMPLATES: dict[str, dict] = {
                 "{\n"
                 "  \"compilerOptions\": {\n"
                 "    \"target\": \"ES2022\",\n"
+                "    \"module\": \"nodenext\",\n"
+                "    \"moduleResolution\": \"nodenext\",\n"
                 "    \"outDir\": \"dist\",\n"
                 "    \"rootDir\": \"src\",\n"
                 "    \"strict\": true\n"
@@ -309,7 +425,31 @@ LICENSES: dict[str, str] = {
 
 
 def render(text: str, **variables: str) -> str:
-    """Render a template body. Undefined ``$tokens`` are left untouched."""
+    """Render a template body. Undefined ``$tokens`` are left untouched.
+
+    A ``$description_json`` token is derived from ``description`` using the
+    stdlib ``json`` encoder. Structured formats (``pyproject.toml``,
+    ``package.json``, ``Chart.yaml``) interpolate that token so a description
+    with quotes, backslashes, newlines or non-ASCII text becomes a single valid,
+    decodable string literal; the surrounding quotes come from the encoder, so
+    those templates must not add their own. ``$description`` itself stays the
+    raw, human-readable value for Markdown and agent prose.
+
+    This is format-aware stdlib serialization, not a bespoke escaping framework:
+    a JSON string literal is also a valid TOML basic string and a valid YAML
+    double-quoted scalar, so one encoded token covers all three structured
+    targets at runtime without importing PyYAML.
+    """
+    if isinstance(variables.get("name"), str):
+        normalized = unicodedata.normalize("NFKD", variables["name"])
+        ascii_name = normalized.encode("ascii", "ignore").decode("ascii").lower()
+        helm_name = re.sub(r"[^a-z0-9]+", "-", ascii_name).strip("-") or "chart"
+        variables = {**variables, "helm_name": helm_name}
+    if isinstance(variables.get("description"), str):
+        variables = {
+            **variables,
+            "description_json": json.dumps(variables["description"], ensure_ascii=False),
+        }
     return Template(text).safe_substitute(**variables)
 
 
