@@ -11,7 +11,7 @@ from .agents import agent_overlay_files, universal_harness_files
 from .presets import PresetConfig
 from .templates import LICENSES, get_template, render
 
-DEFAULT_GRAPHIFY_BIN = Path("/Users/mac/.local/bin/graphify")
+DEFAULT_GRAPHIFY_BIN = Path("~/.local/bin/graphify")
 
 
 class PathCollisionError(ValueError):
@@ -96,14 +96,28 @@ def compose_project_files(
     if extra_vars:
         variables.update(extra_vars)
 
+    harness = universal_harness_files(
+        preset,
+        config_dir=config_dir,
+        lang=lang,
+        include_graphify=include_graphify,
+    )
+    remember_files = sorted(p for p in harness if p.startswith(".remember/"))
+    skill_files = sorted(p for p in harness if p.startswith(".agents/skills/"))
+
     raw_files: dict[str, str] = {}
     _merge(raw_files, get_template(lang)["files"], "base template")
+    _merge(raw_files, harness, "agent harness")
     _merge(
         raw_files,
-        universal_harness_files(preset, config_dir=config_dir, lang=lang),
-        "agent harness",
+        agent_overlay_files(
+            preset.agents,
+            include_graphify=include_graphify,
+            remember_files=remember_files,
+            skill_files=skill_files,
+        ),
+        "assistant overlays",
     )
-    _merge(raw_files, agent_overlay_files(preset.agents), "assistant overlays")
 
     if license != "none":
         lic_body = LICENSES.get(license)
@@ -125,36 +139,21 @@ def compose_project_files(
                 "different content; refusing to overwrite"
             )
         rendered[rendered_path] = rendered_body
-    if not include_graphify:
-        rendered = _strip_graphify(rendered)
     find_output_conflicts(rendered)
     return rendered
-
-
-def _strip_graphify(files: dict[str, str]) -> dict[str, str]:
-    """Drop graphify scaffolding and any line that instructs using graphify.
-
-    Keeps generated instructions honest when graphify was skipped (--no-graphify)
-    so the project never mandates a tool it did not set up.
-    """
-    out: dict[str, str] = {}
-    for path, body in files.items():
-        if "graphify" in path.lower():
-            continue
-        kept = [ln for ln in body.splitlines() if "graphify" not in ln.lower()]
-        text = "\n".join(kept)
-        if body.endswith("\n") and text:
-            text += "\n"
-        out[path] = text
-    return out
 
 
 def _find_graphify() -> str | None:
     which_bin = shutil.which("graphify")
     if which_bin:
         return which_bin
-    if DEFAULT_GRAPHIFY_BIN.is_file():
-        return str(DEFAULT_GRAPHIFY_BIN)
+    candidate = (
+        Path.home() / ".local" / "bin" / "graphify"
+        if DEFAULT_GRAPHIFY_BIN == Path("~/.local/bin/graphify")
+        else DEFAULT_GRAPHIFY_BIN.expanduser()
+    )
+    if candidate.is_file():
+        return str(candidate)
     return None
 
 
