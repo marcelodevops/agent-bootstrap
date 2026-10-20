@@ -7,9 +7,16 @@ Scaffold AI-agent-ready projects from curated language templates, customizable w
 
 ## Install
 
+Install globally as an isolated CLI tool with `uv` (recommended) or `pipx`, or via `pip`:
+
 ```bash
+uv tool install agent-bootstrap      # installs `projboot` and `agent-bootstrap` globally
+# or from a local checkout:
+uv tool install --force -e .
+
+# or via pip:
 pip install agent-bootstrap          # installs both `projboot` and `agent-bootstrap`
-pip install -e ".[dev]"              # dev: + pytest for the test suite
+pip install -e ".[dev]"              # dev: + pytest & build
 ```
 
 Requires Python 3.11+. Local scaffolding needs no token and no network; GitHub remote creation (`-r github --create`) uses `GITHUB_TOKEN`.
@@ -18,29 +25,42 @@ Requires Python 3.11+. Local scaffolding needs no token and no network; GitHub r
 
 ## Quickstart: Preview & AI Agent Project Bootstrapping (`projboot preview` / `projboot create`)
 
-Preview the composed file tree, implied directories, selected integrations, and planned post-generation actions in memory first (no files are written, and no `git`, `graphify`, dependency install, or GitHub calls are executed):
+### 1. Initialize your personal presets and skills store
 
 ```bash
-projboot preview new-project -l python -a claude -a gh-copilot
+projboot config-init
+projboot list-presets
 ```
 
-Then run `projboot create` with the same arguments to generate the project locally, or pass `-r github --create --clone` to also create a GitHub repository:
+### 2. Preview the composed file tree and planned actions
+
+Preview runs in memory. It does not write files, run `git` or Graphify, install dependencies, or access GitHub.
 
 ```bash
-projboot create new-project -l python -a claude -a gh-copilot -r github --create --clone
+projboot preview demo-agent -l python -a claude -a gh-copilot
 ```
 
-Or scaffold locally with custom directories for generated outputs, helper scripts, an ordered prompts catalog, and architecture conventions (all automatically wired into `AGENTS.md`, `CLAUDE.md`, `.github/copilot-instructions.md`, etc.):
+### 3. Create a local AI-agent project
 
 ```bash
-projboot create new-project \
+projboot create demo-agent \
   -l python \
-  -a claude -a gh-copilot -a codeassistant \
+  -a claude -a gh-copilot \
   --arch hexagonal \
   --outputs-dir artifacts/out \
   --scripts-dir hack \
-  --prompts-file docs/PROMPTS.md
+  --prompts-file PROMPTS.md
 ```
+
+### 4. Create a GitHub repository and push one Git history
+
+With `GITHUB_TOKEN` set, `--create` connects the local checkout and pushes its initial commit. `--clone` is retained as a compatibility flag and is not required.
+
+```bash
+projboot create new-project -l python -a claude -a gh-copilot -r github --create
+```
+
+With `--no-git`, the repository is created or selected without pushing; its existing contents are not inspected. `--force` allows selecting an existing repository, but the normal push never rewrites remote history.
 
 ### What `projboot create` Generates
 
@@ -94,7 +114,22 @@ projboot list-presets
 ```
 
 This creates:
-- `~/.config/projboot/presets.toml` — Define named presets (`default`, `clean-arch`, or your own) with default `arch`, `outputs_dir`, `scripts_dir`, `prompts_file`, and `agents`.
+- `~/.config/projboot/presets.toml` — Define named presets (`default`, `clean-arch`, or your own) with default `arch`, `outputs_dir`, `scripts_dir`, `prompts_file`, and `agents`:
+  ```toml
+  [presets.default]
+  arch = "modular"
+  outputs_dir = "outputs"
+  scripts_dir = "scripts"
+  prompts_file = "PROMPTS.md"
+  agents = []
+
+  [presets.clean-arch]
+  arch = "clean-architecture"
+  outputs_dir = "artifacts/outputs"
+  scripts_dir = "scripts"
+  prompts_file = "docs/PROMPTS.md"
+  agents = ["claude", "gh-copilot"]
+  ```
 - `~/.config/projboot/skills/` — Any skill files placed here are automatically copied into `.agents/skills/` and rendered with your project's `$name`, `$arch`, `$outputs_dir`, `$scripts_dir`, and `$prompts_file` variables.
 - `~/.config/projboot/remember/` — Starter memory templates copied into `.remember/` on every new project.
 
