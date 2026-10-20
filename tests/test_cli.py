@@ -267,8 +267,8 @@ def test_write_local_no_partial_on_escape(tmp_path):
     assert not (tmp_path / "out" / "ok.txt").exists()
 
 
-def test_clone_produces_connected_local_repo(tmp_path, monkeypatch):
-    # Real git (no network): --clone --create should leave origin + a commit.
+def test_clone_push_failure_reports_partial_local_repo(tmp_path, monkeypatch):
+    # Real local git: the mocked GitHub URL cannot be pushed, so CLI reports partial.
     import subprocess
 
     import bootstrapper.github_utils as gu
@@ -286,7 +286,9 @@ def test_clone_produces_connected_local_repo(tmp_path, monkeypatch):
         ["create", "clonetest", "-l", "none", "--agent", "claude",
          "--create", "-r", "github", "--clone", "--no-graphify"]
     )
-    assert res.exit_code == 0, res.stdout
+    assert res.exit_code == 1, res.stdout
+    assert "Skipped initial push: git push failed" in res.stdout
+    assert "GitHub remote: partial / pending" in res.stdout
 
     proj = tmp_path / "clonetest"
     remote = subprocess.run(

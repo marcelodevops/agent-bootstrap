@@ -481,7 +481,7 @@ def test_create_derives_checks_from_actual_composed_files(
     assert "python -m build" in checks
 
 
-def test_create_clone_reports_reconcile_step_and_partial_wiring_when_git_fails(
+def test_create_clone_reports_push_failure_and_partial_wiring_when_git_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     import bootstrapper.github_utils as gu
@@ -493,7 +493,7 @@ def test_create_clone_reports_reconcile_step_and_partial_wiring_when_git_fails(
     monkeypatch.setattr(gu, "create_repo", lambda owner, n, d, p, force=False: fake_repo)
     monkeypatch.setattr(gu, "add_file", lambda *a, **k: None)
 
-    # 1. Real git wiring succeeds: first steps include `git fetch origin  [not executed]`
+    # 1. Local wiring succeeds, but the mocked GitHub URL cannot be pushed.
     res_ok = _run(
         [
             "create",
@@ -507,15 +507,13 @@ def test_create_clone_reports_reconcile_step_and_partial_wiring_when_git_fails(
             "--no-graphify",
         ]
     )
-    assert res_ok.exit_code == 0, res_ok.stdout
+    assert res_ok.exit_code == 1, res_ok.stdout
     hooks_ok = "\n".join(
         _section_lines(res_ok.stdout, "Hook & remote status (actual results)")
     )
-    assert "GitHub remote: ran — created https://github.com/acme/clone-svc.git" in hooks_ok
-    steps_ok = "\n".join(
-        _section_lines(res_ok.stdout, "First steps (user-run commands — not executed")
-    )
-    assert "git fetch origin" in steps_ok
+    assert "Skipped initial push: git push failed" in res_ok.stdout
+    assert "GitHub remote: partial / pending" in hooks_ok
+    assert "GitHub remote: ran" not in hooks_ok
 
     # 2. If local git hooks fail during --clone, status is partial/pending, never full success
     monkeypatch.setattr(
@@ -536,7 +534,7 @@ def test_create_clone_reports_reconcile_step_and_partial_wiring_when_git_fails(
             "--no-graphify",
         ]
     )
-    assert res_partial.exit_code == 0, res_partial.stdout
+    assert res_partial.exit_code == 1, res_partial.stdout
     hooks_partial = "\n".join(
         _section_lines(res_partial.stdout, "Hook & remote status (actual results)")
     )
@@ -544,7 +542,7 @@ def test_create_clone_reports_reconcile_step_and_partial_wiring_when_git_fails(
     unverified_partial = "\n".join(
         _section_lines(res_partial.stdout, "Unverified / pending items")
     )
-    assert "local git remote/commit wiring: pending / incomplete" in unverified_partial
+    assert "local git remote/commit/push: pending / incomplete" in unverified_partial
 
 
 def test_create_no_graphify_with_outputs_dir_graphify_out_does_not_mislabel_as_graphify(

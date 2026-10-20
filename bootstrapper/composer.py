@@ -7,6 +7,7 @@ import os
 from pathlib import Path, PurePosixPath
 import shutil
 import subprocess
+import tempfile
 
 from .agents import agent_overlay_files, universal_harness_files
 from .presets import PresetConfig
@@ -165,11 +166,13 @@ def run_post_hooks(
     run_graphify: bool = True,
     connect_remote_url: str | None = None,
     make_commit: bool = False,
+    stage_paths: list[str] | None = None,
 ) -> list[str]:
     """Run best-effort local post-scaffold hooks (git init/remote/commit, graphify)."""
     messages: list[str] = []
 
     if init_git:
+        initialized = False
         try:
             subprocess.run(
                 ["git", "init", "-b", "main"],
@@ -179,18 +182,42 @@ def run_post_hooks(
                 text=True,
             )
             messages.append("Initialized git repository (main)")
+            initialized = True
         except (OSError, subprocess.CalledProcessError) as exc:
             messages.append(f"Skipped git init: {exc}")
 
-        if connect_remote_url:
+        remote_added = False
+        if connect_remote_url and initialized:
             if _git_ok(target, ["git", "remote", "add", "origin", connect_remote_url]):
                 messages.append(f"Added origin remote: {connect_remote_url}")
+                remote_added = True
             elif _git_ok(target, ["git", "remote", "set-url", "origin", connect_remote_url]):
                 messages.append(f"Updated origin remote: {connect_remote_url}")
+                remote_added = True
+            else:
+                messages.append(f"Skipped origin remote setup: git could not set {connect_remote_url}")
 
-        if make_commit:
-            _git_ok(target, ["git", "add", "-A"])
-            if _git_ok(
+        if make_commit and initialized and remote_added:
+            index_env = None
+            if stage_paths is None:
+                staged = _git_ok(target, ["git", "add", "-A"])
+            else:
+                index_dir = tempfile.TemporaryDirectory(prefix="projboot-index-")
+                index_env = {
+                    **os.environ,
+                    "GIT_INDEX_FILE": str(Path(index_dir.name) / "index"),
+                }
+                base_tree = (
+                    ["git", "read-tree", "HEAD"]
+                    if _git_ok(target, ["git", "rev-parse", "--verify", "HEAD"])
+                    else ["git", "read-tree", "--empty"]
+                )
+                staged = _git_ok(target, base_tree, env=index_env) and _git_ok(
+                    target, ["git", "add", "--", *stage_paths], env=index_env
+                )
+            if not staged:
+                messages.append("Skipped initial commit: git add failed")
+            elif _git_ok(
                 target,
                 [
                     "git",
@@ -199,8 +226,23 @@ def run_post_hooks(
                     "commit",
                     "-m", "Bootstrap project scaffold",
                 ],
+                env=index_env,
             ):
                 messages.append("Created initial commit")
+                if stage_paths is not None and not _git_ok(
+                    target, ["git", "reset", "-q", "HEAD", "--", *stage_paths]
+                ):
+                    messages.append(
+                        "Warning: local index could not be synchronized with the initial commit"
+                    )
+                if _git_ok(target, ["git", "push", "--set-upstream", "origin", "main"]):
+                    messages.append("Pushed initial commit to origin (main)")
+                else:
+                    messages.append("Skipped initial push: git push failed; remote history was not rewritten")
+            else:
+                messages.append("Skipped initial commit: git commit failed")
+            if stage_paths is not None:
+                index_dir.cleanup()
 
     if run_graphify:
         graphify_bin = _find_graphify()
@@ -222,10 +264,13 @@ def run_post_hooks(
     return messages
 
 
-def _git_ok(cwd: Path, cmd: list[str]) -> bool:
+def _git_ok(cwd: Path, cmd: list[str], *, env: dict[str, str] | None = None) -> bool:
     """Run a best-effort git command; True on success, False otherwise."""
     try:
-        subprocess.run(cmd, cwd=cwd, check=True, capture_output=True, text=True)
+        kwargs = {"cwd": cwd, "check": True, "capture_output": True, "text": True}
+        if env is not None:
+            kwargs["env"] = env
+        subprocess.run(cmd, **kwargs)
         return True
     except (OSError, subprocess.CalledProcessError):
         return False

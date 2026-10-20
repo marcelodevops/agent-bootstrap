@@ -304,8 +304,9 @@ def _push_github(
     private: bool,
     org: str | None,
     force: bool,
+    upload_files: bool = True,
 ) -> str:
-    """Create a GitHub repository and upload all scaffolded files.
+    """Create a GitHub repository, optionally uploading files through its API.
 
     Returns the repo's clone URL so callers can wire a local checkout.
     """
@@ -329,11 +330,12 @@ def _push_github(
             err=True,
         )
         raise typer.Exit(code=1) from exc
-    typer.echo(f"Repo ready: {repo.clone_url}")
-    for path, content in files.items():
-        add_file(repo, path, content, f"Add {path}")
-        typer.echo(f"  + {path}")
-    typer.echo("Done.")
+    typer.echo(f"Using GitHub repository: {repo.clone_url}")
+    if upload_files:
+        for path, content in files.items():
+            add_file(repo, path, content, f"Add {path}")
+            typer.echo(f"  + {path}")
+        typer.echo("Done.")
     return repo.clone_url
 
 
@@ -580,6 +582,7 @@ def create(
             private=private,
             org=org,
             force=force,
+            upload_files=not clone,
         )
     elif remote:
         typer.echo(f"Remote '{remote}' selected but --create not given; not uploading.")
@@ -594,15 +597,16 @@ def create(
         run_graphify=not no_graphify,
         connect_remote_url=connect_url,
         make_commit=bool(connect_url),
+        stage_paths=list(files),
     )
     for msg in hook_messages:
         typer.echo(f"  * {msg}")
 
-    if connect_url:
-        typer.echo(
-            "Local repo has origin + an initial commit; files were uploaded via the "
-            "API, so `git fetch` and reconcile before `git push`."
-        )
+    clone_ready = (
+        any("origin remote:" in msg for msg in hook_messages)
+        and "Created initial commit" in hook_messages
+        and "Pushed initial commit to origin (main)" in hook_messages
+    )
 
     _echo_create_summary(
         name=name,
@@ -617,6 +621,8 @@ def create(
         no_graphify=no_graphify,
         hook_messages=hook_messages,
     )
+    if create_remote and clone and not clone_ready:
+        raise typer.Exit(code=1)
 
 
 _AGENT_OVERLAY_EXPECTED_PATHS: dict[str, tuple[str, ...]] = {
@@ -674,6 +680,10 @@ def _echo_create_summary(
     origin_msg = next((m for m in hook_messages if "origin remote:" in m), None)
     commit_msg = next(
         (m for m in hook_messages if m == "Created initial commit"), None
+    )
+    push_msg = next(
+        (m for m in hook_messages if m == "Pushed initial commit to origin (main)"),
+        None,
     )
 
     typer.echo("")
@@ -766,15 +776,15 @@ def _echo_create_summary(
 
     if create_remote and clone_url:
         if clone:
-            if origin_msg and commit_msg:
+            if origin_msg and commit_msg and push_msg:
                 typer.echo(
-                    f"  GitHub remote: ran — created {clone_url}, wired origin, and "
-                    "created initial local commit (run git fetch and reconcile before git push)"
+                    f"  GitHub remote: ran — created {clone_url}, wired origin, "
+                    "created the local commit, and pushed the shared history"
                 )
             else:
                 typer.echo(
                     f"  GitHub remote: partial / pending — created {clone_url}, "
-                    "but local origin/commit wiring did not complete"
+                    "but local origin/commit/push did not complete"
                 )
         else:
             typer.echo(
@@ -798,11 +808,6 @@ def _echo_create_summary(
 
     typer.echo("First steps (user-run commands — not executed by projboot):")
     typer.echo(f"  cd {name}  [not executed]")
-    if create_remote and clone_url and clone and origin_msg and commit_msg:
-        typer.echo(
-            "  git fetch origin  # reconcile API-uploaded remote history before "
-            "git push  [not executed]"
-        )
     if has_python:
         typer.echo(
             "  python -m venv .venv && source .venv/bin/activate && pip install -e .  "
@@ -894,10 +899,10 @@ def _echo_create_summary(
             f"  git repository: pending / not initialized "
             f"({git_skip_msg or 'git init did not complete'})"
         )
-    if create_remote and clone_url and clone and not (origin_msg and commit_msg):
+    if create_remote and clone_url and clone and not (origin_msg and commit_msg and push_msg):
         typer.echo(
-            "  local git remote/commit wiring: pending / incomplete "
-            "(--clone requested, but origin or initial commit did not complete)"
+            "  local git remote/commit/push: pending / incomplete "
+            "(--clone requested, but origin, initial commit, or normal push did not complete)"
         )
     if has_graphify and not graphify_ran_msg:
         typer.echo(
