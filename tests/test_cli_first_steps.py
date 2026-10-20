@@ -234,6 +234,25 @@ def test_create_rails_keeps_experimental_label_and_syntax_only_check(tmp_path: P
         assert foreign not in lowered
 
 
+def test_create_helm_profile_uses_helm_chart_label(tmp_path: Path):
+    res = _run(
+        [
+            "create",
+            "helm-svc",
+            "-l",
+            "helm-chart",
+            "--no-git",
+            "--no-graphify",
+        ]
+    )
+    assert res.exit_code == 0, res.stdout
+    generated = "\n".join(
+        _section_lines(res.stdout, "Generated and configured in helm-svc/")
+    )
+    assert "Helm chart scaffold" in generated
+    assert "Helm v2 chart scaffold" not in generated
+
+
 def test_create_none_profile_invents_no_language_commands_or_checks(tmp_path: Path):
     res = _run(
         [

@@ -719,7 +719,7 @@ def _echo_create_summary(
         )
     elif has_helm:
         typer.echo(
-            f"  profile (--lang): {lang} (Helm v2 chart scaffold with Chart.yaml, "
+            f"  profile (--lang): {lang} (Helm chart scaffold with Chart.yaml, "
             "values.yaml, and templates/)"
         )
     elif has_rails:
