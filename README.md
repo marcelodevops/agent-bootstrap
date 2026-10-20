@@ -168,7 +168,7 @@ Build a layout from a `tree`-style file — directories become paths, leaf files
 projboot init-from-tree --name myproject --tree-file examples/tree.txt --gitkeep --local
 ```
 
-`--gitkeep` drops a `.gitkeep` in empty directories so they survive; `--force` allows overwriting a non-empty local target directory.
+`--gitkeep` drops a `.gitkeep` in empty directories so they survive; `--force` allows merging into a non-empty local target. Generated files may replace files at matching paths; unrelated files are preserved.
 
 ---
 
