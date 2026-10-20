@@ -100,7 +100,7 @@ def compose_project_files(
     _merge(raw_files, get_template(lang)["files"], "base template")
     _merge(
         raw_files,
-        universal_harness_files(preset, config_dir=config_dir),
+        universal_harness_files(preset, config_dir=config_dir, lang=lang),
         "agent harness",
     )
     _merge(raw_files, agent_overlay_files(preset.agents), "assistant overlays")
