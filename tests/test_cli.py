@@ -35,6 +35,35 @@ def test_init_local_helm(tmp_path, monkeypatch):
     assert "{{ .Values.replicaCount }}" in deployment.read_text()
 
 
+@pytest.mark.parametrize(
+    ("project_name", "chart_name"),
+    [("My_App", "my-app"), ("café", "cafe"), ("my.chart", "my-chart")],
+)
+def test_init_helm_uses_valid_chart_name_without_renaming_project(
+    tmp_path, monkeypatch, project_name, chart_name
+):
+    monkeypatch.chdir(tmp_path)
+    result = _run(
+        ["init", "--template", "helm-chart", "--name", project_name, "--local"]
+    )
+    assert result.exit_code == 0, result.stdout
+    chart = tmp_path / project_name / "Chart.yaml"
+    assert chart.is_file()
+    assert f"name: {chart_name}" in chart.read_text()
+
+
+def test_init_non_helm_keeps_project_identity(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    project_name = "My_App"
+    result = _run(
+        ["init", "--template", "python-microservice", "--name", project_name,
+         "--local"]
+    )
+    assert result.exit_code == 0, result.stdout
+    assert (tmp_path / project_name / "README.md").is_file()
+    assert f"# {project_name}" in (tmp_path / project_name / "README.md").read_text()
+
+
 def test_init_local_custom_var(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     res = _run(

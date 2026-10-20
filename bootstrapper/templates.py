@@ -13,6 +13,8 @@ body needs a literal ``$name``-looking token, escape it as ``$$``.
 from __future__ import annotations
 
 import json
+import re
+import unicodedata
 from string import Template
 
 # name -> {metadata, files: {path: template_body}}
@@ -159,7 +161,7 @@ TEMPLATES: dict[str, dict] = {
         "files": {
             "Chart.yaml": (
                 'apiVersion: v2\n'
-                'name: $name\n'
+                'name: $helm_name\n'
                 'description: $description_json\n'
                 'type: application\n'
                 'version: 0.1.0\n'
@@ -438,6 +440,11 @@ def render(text: str, **variables: str) -> str:
     double-quoted scalar, so one encoded token covers all three structured
     targets at runtime without importing PyYAML.
     """
+    if isinstance(variables.get("name"), str):
+        normalized = unicodedata.normalize("NFKD", variables["name"])
+        ascii_name = normalized.encode("ascii", "ignore").decode("ascii").lower()
+        helm_name = re.sub(r"[^a-z0-9]+", "-", ascii_name).strip("-") or "chart"
+        variables = {**variables, "helm_name": helm_name}
     if isinstance(variables.get("description"), str):
         variables = {
             **variables,

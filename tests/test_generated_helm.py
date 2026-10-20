@@ -36,14 +36,15 @@ helm_required = pytest.mark.skipif(
 )
 
 
-def _rendered_files() -> dict[str, str]:
+def _rendered_files(name="myapp") -> dict[str, str]:
     spec = get_template("helm-chart")
-    return {p: render(b, **VARS) for p, b in spec["files"].items()}
+    variables = {**VARS, "name": name}
+    return {p: render(b, **variables) for p, b in spec["files"].items()}
 
 
-def _materialize(tmp_path):
+def _materialize(tmp_path, name="myapp"):
     chart = tmp_path / "chart"
-    for rel, body in _rendered_files().items():
+    for rel, body in _rendered_files(name).items():
         dest = chart / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(body)
@@ -75,6 +76,16 @@ def _image(docs):
 @helm_required
 def test_generated_chart_lints(tmp_path):
     chart = _materialize(tmp_path)
+    proc = subprocess.run(
+        [HELM, "lint", str(chart)], capture_output=True, text=True
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+@pytest.mark.parametrize("project_name", ["My_App", "café", "my.chart"])
+@helm_required
+def test_chart_names_accepted_by_cli_lint_natively(tmp_path, project_name):
+    chart = _materialize(tmp_path, project_name)
     proc = subprocess.run(
         [HELM, "lint", str(chart)], capture_output=True, text=True
     )
