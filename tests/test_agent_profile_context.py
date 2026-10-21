@@ -1,5 +1,5 @@
-"""C2 contract tests: AGENTS.md and thin overlays provide accurate, profile-resolved
-commands, layout, and change boundaries matching the actual generated files.
+"""C2 contract tests: AGENTS.md and stack-aware overlays provide accurate, profile-resolved
+commands, layout, architecture layers, and change boundaries matching the actual generated files.
 """
 
 from __future__ import annotations
@@ -20,7 +20,6 @@ from bootstrapper.composer import compose_project_files
 from bootstrapper.presets import PresetConfig
 
 HELM = shutil.which("helm")
-RUBY = shutil.which("ruby")
 
 
 def _materialize(tmp_path: Path, files: dict[str, str], subdir: str = "proj") -> Path:
@@ -54,7 +53,9 @@ def _extract_section_paths(markdown: str, heading: str) -> list[str]:
 
 
 @pytest.mark.parametrize("lang", ["python", "python-microservice"])
-def test_python_profile_and_alias_document_executable_appstarter_commands(tmp_path: Path, lang: str):
+def test_python_profile_and_alias_document_executable_pkg_commands_and_hexagonal_layers(
+    tmp_path: Path, lang: str
+):
     preset = PresetConfig(
         name="custom",
         arch="hexagonal",
@@ -74,15 +75,20 @@ def test_python_profile_and_alias_document_executable_appstarter_commands(tmp_pa
 
     pyproject = tomllib.loads((proj / "pyproject.toml").read_text(encoding="utf-8"))
     scripts = pyproject["project"]["scripts"]
-    assert "appstarter" in scripts
+    assert "orders_svc" in scripts
+    assert "appstarter" not in scripts
+
+    # Real hexagonal architecture layer packages exist on disk
+    for layer in ("domain", "ports", "adapters"):
+        assert (proj / "src" / "orders_svc" / layer / "__init__.py").is_file()
 
     agents_md = (proj / "AGENTS.md").read_text(encoding="utf-8")
     cmd_fields = _extract_command_fields(agents_md)
     assert {"setup", "run", "test", "build"} <= set(cmd_fields.keys())
 
     assert "pip install -e ." in cmd_fields["setup"]
-    assert "appstarter" in cmd_fields["run"]
-    assert "python -m appstarter" in cmd_fields["run"]
+    assert "orders_svc" in cmd_fields["run"]
+    assert "python -m orders_svc" in cmd_fields["run"]
     assert "pytest" in cmd_fields["test"]
     assert "python -m build" in cmd_fields["build"]
 
@@ -90,7 +96,7 @@ def test_python_profile_and_alias_document_executable_appstarter_commands(tmp_pa
     env = dict(os.environ)
     env["PYTHONPATH"] = str(proj / "src")
     run_proc = subprocess.run(
-        [sys.executable, "-m", "appstarter"],
+        [sys.executable, "-m", "orders_svc"],
         cwd=proj,
         env=env,
         capture_output=True,
@@ -109,6 +115,41 @@ def test_python_profile_and_alias_document_executable_appstarter_commands(tmp_pa
         timeout=30,
     )
     assert test_proc.returncode == 0, test_proc.stdout + test_proc.stderr
+
+
+@pytest.mark.parametrize(
+    ("arch", "expected_layers"),
+    [
+        ("hexagonal", ("domain", "ports", "adapters")),
+        ("clean-architecture", ("domain", "use_cases", "interfaces", "infrastructure")),
+        ("layered", ("api", "services", "repositories")),
+    ],
+)
+def test_structural_arch_layers_scaffolded_for_python_and_typescript(
+    tmp_path: Path, arch: str, expected_layers: tuple[str, ...]
+):
+    preset = PresetConfig(name="arch-test", arch=arch, agents=["claude"])
+    py_files = compose_project_files(
+        name="billing-api",
+        description="Billing API",
+        lang="python",
+        preset=preset,
+        include_graphify=False,
+    )
+    for layer in expected_layers:
+        assert f"src/billing_api/{layer}/__init__.py" in py_files
+        assert f"src/billing_api/{layer}/" in py_files["AGENTS.md"]
+
+    ts_files = compose_project_files(
+        name="billing-ts",
+        description="Billing TS",
+        lang="typescript",
+        preset=preset,
+        include_graphify=False,
+    )
+    for layer in expected_layers:
+        assert f"src/{layer}/index.ts" in ts_files
+        assert f"src/{layer}/" in ts_files["AGENTS.md"]
 
 
 def test_typescript_profile_documents_npm_build_and_start_without_invented_test_script(tmp_path: Path):
@@ -174,93 +215,16 @@ def test_helm_profile_documents_lint_and_template_without_claiming_cluster_deplo
         assert tpl_proc.returncode == 0, tpl_proc.stdout + tpl_proc.stderr
 
 
-def _extract_ruby_syntax_commands(test_field: str) -> list[list[str]]:
-    """Extract documented `ruby -c ...` command steps from the Test field."""
-    code_spans = re.findall(r"`([^`\n]+)`", test_field)
-    ruby_spans = [span for span in code_spans if "ruby -c" in span]
-    assert ruby_spans, f"Expected documented `ruby -c` command in {test_field!r}"
-    steps: list[list[str]] = []
-    for part in ruby_spans[0].split("&&"):
-        tokens = part.strip().split()
-        assert tokens[:2] == ["ruby", "-c"], f"Unexpected command segment: {part!r}"
-        steps.append(tokens)
-    return steps
-
-
-def test_rails_profile_states_experimental_non_runnable_limits_in_agents_md(tmp_path: Path):
-    preset = PresetConfig(name="default", agents=["claude", "gh-copilot"])
-    files = compose_project_files(
-        name="rails-demo",
-        description="Rails demo",
-        lang="rails",
-        preset=preset,
-        include_graphify=False,
-    )
-    proj = _materialize(tmp_path, files)
-    agents_md = (proj / "AGENTS.md").read_text(encoding="utf-8")
-    cmd_fields = _extract_command_fields(agents_md)
-    assert {"profile", "setup", "run", "test", "build"} <= set(cmd_fields.keys())
-
-    assert "experimental" in cmd_fields["profile"].lower()
-    assert "unavailable" in cmd_fields["setup"].lower()
-    assert "unavailable" in cmd_fields["run"].lower()
-    assert "unavailable" in cmd_fields["test"].lower()
-    assert "unavailable" in cmd_fields["build"].lower()
-    assert "rails server" not in agents_md.lower()
-
-    steps = _extract_ruby_syntax_commands(cmd_fields["test"])
-    assert len(steps) == 2, f"Expected two separate `ruby -c` invocations, got {steps}"
-    for tokens in steps:
-        assert len(tokens) == 3, f"`ruby -c` only checks the first file argument; got {tokens}"
-
-    if RUBY:
-        for tokens in steps:
-            ruby_proc = subprocess.run(
-                [RUBY, *tokens[1:]],
-                cwd=proj,
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            assert ruby_proc.returncode == 0, ruby_proc.stdout + ruby_proc.stderr
-
-
-@pytest.mark.skipif(RUBY is None, reason="ruby binary required for native syntax check")
-def test_rails_documented_syntax_check_catches_invalid_second_file(tmp_path: Path):
-    """Regression: `ruby -c a.rb b.rb` ignores `b.rb` as argv; the documented
-    command in AGENTS.md must check each file so a broken second file fails."""
-    preset = PresetConfig(name="default", agents=["claude"])
-    files = compose_project_files(
-        name="rails-broken-second",
-        description="Rails syntax regression",
-        lang="rails",
-        preset=preset,
-        include_graphify=False,
-    )
-    proj = _materialize(tmp_path, files)
-    agents_md = (proj / "AGENTS.md").read_text(encoding="utf-8")
-    cmd_fields = _extract_command_fields(agents_md)
-    steps = _extract_ruby_syntax_commands(cmd_fields["test"])
-
-    # Corrupt the second generated Ruby file while leaving config/application.rb valid
-    (proj / "app/controllers/application_controller.rb").write_text(
-        "class ApplicationController <\n", encoding="utf-8"
-    )
-
-    codes: list[int] = []
-    for tokens in steps:
-        proc = subprocess.run(
-            [RUBY, *tokens[1:]],
-            cwd=proj,
-            capture_output=True,
-            text=True,
-            timeout=30,
+def test_rails_template_is_removed(tmp_path: Path):
+    preset = PresetConfig(name="default")
+    with pytest.raises(KeyError, match="Unknown template 'rails'"):
+        compose_project_files(
+            name="rails-demo",
+            description="Rails demo",
+            lang="rails",
+            preset=preset,
+            include_graphify=False,
         )
-        codes.append(proc.returncode)
-
-    assert any(code != 0 for code in codes), (
-        f"Documented syntax check {steps} returned 0 despite invalid controller syntax"
-    )
 
 
 def test_none_profile_invents_no_runtime_or_test_toolchain(tmp_path: Path):
@@ -285,7 +249,7 @@ def test_none_profile_invents_no_runtime_or_test_toolchain(tmp_path: Path):
         assert fabricated not in lowered
 
 
-@pytest.mark.parametrize("lang", ["python", "python-microservice", "typescript", "helm-chart", "rails", "none"])
+@pytest.mark.parametrize("lang", ["python", "python-microservice", "typescript", "helm-chart", "none"])
 def test_documented_layout_paths_and_thin_overlays_match_generated_tree(tmp_path: Path, lang: str):
     preset = PresetConfig(
         name="custom",
@@ -318,7 +282,7 @@ def test_documented_layout_paths_and_thin_overlays_match_generated_tree(tmp_path
     assert "ops/scripts/" in agents_md
     assert "docs/PROMPTS.md" in agents_md
 
-    # Thin overlays reference AGENTS.md and do not invent foreign toolchain commands
+    # Thin overlays reference AGENTS.md, include stack hints, and do not invent foreign toolchain commands
     for overlay_rel in (
         "CLAUDE.md",
         ".github/copilot-instructions.md",

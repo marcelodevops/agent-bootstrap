@@ -141,7 +141,6 @@ def test_init_dispatches_to_github(tmp_path, monkeypatch):
     monkeypatch.setattr(gu, "get_github", lambda: MagicMock())
     monkeypatch.setattr(gu, "get_owner", lambda gh, org: MagicMock())
     monkeypatch.setattr(gu, "create_repo", lambda owner, n, d, p, force=False: fake_repo)
-    monkeypatch.setattr(gu, "add_file", lambda *a, **k: pytest.fail("API upload used"))
 
     res = _run(["init", "--template", "typescript", "--name", "demo"])
     assert res.exit_code == 0, res.stdout
@@ -218,7 +217,6 @@ def test_create_ai_project_with_github_remote(tmp_path, monkeypatch):
     monkeypatch.setattr(gu, "get_github", lambda: MagicMock())
     monkeypatch.setattr(gu, "get_owner", lambda gh, org: MagicMock())
     monkeypatch.setattr(gu, "create_repo", lambda owner, n, d, p, force=False: fake_repo)
-    monkeypatch.setattr(gu, "add_file", lambda *a, **k: pytest.fail("API upload used"))
 
     res = _run(
         [
@@ -265,7 +263,6 @@ def test_create_remote_no_git_does_not_claim_repository_is_empty(tmp_path, monke
     monkeypatch.setattr(gu, "get_github", lambda: MagicMock())
     monkeypatch.setattr(gu, "get_owner", lambda gh, org: MagicMock())
     monkeypatch.setattr(gu, "create_repo", lambda owner, n, d, p, force=False: fake_repo)
-    monkeypatch.setattr(gu, "add_file", lambda *a, **k: pytest.fail("API upload used"))
 
     res = _run(
         ["create", "no-git-remote", "--lang", "none", "--create", "--no-git", "--no-graphify"]
@@ -313,11 +310,10 @@ def test_clone_push_failure_reports_partial_local_repo(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("PROJBOOT_HOME", str(tmp_path / "home"))
     fake_repo = MagicMock()
-    fake_repo.clone_url = "https://github.com/acme/clonetest.git"
+    fake_repo.clone_url = str(tmp_path / "nonexistent-clonetest.git")
     monkeypatch.setattr(gu, "get_github", lambda: MagicMock())
     monkeypatch.setattr(gu, "get_owner", lambda gh, org: MagicMock())
     monkeypatch.setattr(gu, "create_repo", lambda owner, n, d, p, force=False: fake_repo)
-    monkeypatch.setattr(gu, "add_file", lambda *a, **k: None)
 
     res = _run(
         ["create", "clonetest", "-l", "none", "--agent", "claude",
@@ -354,12 +350,9 @@ def test_push_refuses_existing_repo_without_force(tmp_path, monkeypatch):
         raise RepoExistsError("acme/demo")
 
     monkeypatch.setattr(gu, "create_repo", _raise)
-    pushed: list[str] = []
-    monkeypatch.setattr(gu, "add_file", lambda *a, **k: pushed.append("x"))
 
     res = _run(["init", "--template", "typescript", "--name", "demo"])
     assert res.exit_code != 0
-    assert pushed == []  # nothing uploaded against an existing repo
     assert not (tmp_path / "demo").exists()
 
 

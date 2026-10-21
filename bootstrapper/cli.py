@@ -26,7 +26,7 @@ from .presets import (
     load_presets,
     resolve_preset,
 )
-from .templates import LICENSES, get_template, render, template_names
+from .templates import LICENSES, derive_pkg_name, get_template, render, template_names
 
 app = typer.Typer(
     help="Scaffold projects and AI agent harnesses from curated templates, presets, or dirtrees.",
@@ -384,7 +384,10 @@ def _build_template_files(
     template: str, variables: dict[str, str], license: str
 ) -> dict[str, str]:
     spec = get_template(template)
-    files = {path: render(body, **variables) for path, body in spec["files"].items()}
+    files = {
+        render(path, **variables): render(body, **variables)
+        for path, body in spec["files"].items()
+    }
     lic = _license_text(license, variables)
     if lic is not None:
         files["LICENSE"] = lic
@@ -434,6 +437,8 @@ def _resolve_options_and_compose(
     holder: str,
     variable: list[str],
     no_graphify: bool,
+    from_tree: Path | None = None,
+    gitkeep: bool = False,
 ) -> tuple[PresetConfig, dict[str, str]]:
     """Resolve preset options and compose the full file plan, or refuse.
 
@@ -459,6 +464,11 @@ def _resolve_options_and_compose(
             extra_vars=_parse_vars(variable),
             include_graphify=not no_graphify,
         )
+        if from_tree is not None:
+            tree_files = _tree_to_files(from_tree, gitkeep)
+            for rel, content in tree_files.items():
+                files.setdefault(rel, content)
+            find_output_conflicts(files)
     except KeyError as exc:
         raise typer.BadParameter(str(exc)) from exc
     except ValueError as exc:
@@ -505,7 +515,7 @@ def create(
         "python",
         "--lang",
         "-l",
-        help="Language/base template (python, python-microservice, typescript, rails, helm-chart, none)",
+        help="Language/base template (python, python-microservice, typescript, helm-chart, none)",
     ),
     agent: list[str] = typer.Option(
         [],
@@ -520,7 +530,7 @@ def create(
         help="Workflow preset name (see list-presets)",
     ),
     arch: str | None = typer.Option(
-        None, "--arch", help="Override architecture style in agent instructions"
+        None, "--arch", help="Architecture style (modular, hexagonal, clean-architecture, layered)"
     ),
     outputs_dir: str | None = typer.Option(
         None, "--outputs-dir", help="Override directory for generated outputs"
@@ -530,6 +540,17 @@ def create(
     ),
     prompts_file: str | None = typer.Option(
         None, "--prompts-file", help="Override ordered prompts catalog file path"
+    ),
+    from_tree: Path | None = typer.Option(
+        None,
+        "--from-tree",
+        "-t",
+        exists=True,
+        readable=True,
+        help="Merge additional layout paths from a dirtree file",
+    ),
+    gitkeep: bool = typer.Option(
+        False, "--gitkeep", help="Add .gitkeep in empty directories from --from-tree"
     ),
     remote: str | None = typer.Option(
         None, "--remote", "-r", help="Remote provider (e.g. 'github')"
@@ -583,6 +604,8 @@ def create(
         holder=holder,
         variable=variable,
         no_graphify=no_graphify,
+        from_tree=from_tree,
+        gitkeep=gitkeep,
     )
 
     target = Path(name)
@@ -666,17 +689,11 @@ def _echo_create_summary(
     no_graphify: bool,
     hook_messages: list[str],
 ) -> None:
-    """Print post-generation status, user-runnable first steps, and verification checks.
-
-    Separates what was written/configured on disk, what local/remote hooks
-    actually ran, what commands are next steps for the user, and what remains
-    unverified. Commands are derived from the composed ``files`` so tools or
-    scripts absent from the scaffold are never suggested.
-    """
-    has_python = "pyproject.toml" in files and "src/appstarter/main.py" in files
+    """Print post-generation status, user-runnable first steps, and verification checks."""
+    pkg_name = derive_pkg_name(name)
+    has_python = "pyproject.toml" in files and f"src/{pkg_name}/main.py" in files
     has_typescript = "package.json" in files and "tsconfig.json" in files
     has_helm = "Chart.yaml" in files
-    has_rails = "Gemfile" in files and "config/application.rb" in files
     has_graphify = not no_graphify and "graphify-out/.gitkeep" in files
 
     git_ran_msg = next(
@@ -709,23 +726,16 @@ def _echo_create_summary(
     typer.echo(f"Generated and configured in {name}/:")
     if has_python:
         typer.echo(
-            f"  profile (--lang): {lang} (Python starter package in src/appstarter/; "
-            "starter point, not a production service)"
+            f"  profile (--lang): {lang} (Python package in src/{pkg_name}/, arch={preset.arch})"
         )
     elif has_typescript:
         typer.echo(
-            f"  profile (--lang): {lang} (TypeScript Node.js starter with src/index.ts "
-            "and tsconfig.json)"
+            f"  profile (--lang): {lang} (TypeScript Node.js service with src/index.ts, arch={preset.arch})"
         )
     elif has_helm:
         typer.echo(
             f"  profile (--lang): {lang} (Helm chart scaffold with Chart.yaml, "
             "values.yaml, and templates/)"
-        )
-    elif has_rails:
-        typer.echo(
-            f"  profile (--lang): {lang} (EXPERIMENTAL layout sketch only — NOT a "
-            "runnable Rails app)"
         )
     else:
         typer.echo(
@@ -825,87 +835,46 @@ def _echo_create_summary(
     )
 
     typer.echo("First steps (user-run commands — not executed by projboot):")
-    typer.echo(f"  cd {name}  [not executed]")
+    typer.echo(f"  cd {name}")
     if has_python:
         typer.echo(
-            "  python -m venv .venv && source .venv/bin/activate && pip install -e .  "
-            "[not executed]"
+            "  python -m venv .venv && source .venv/bin/activate && pip install -e ."
         )
-        typer.echo("  appstarter  # or: python -m appstarter  [not executed]")
+        typer.echo(f"  {pkg_name}  # or: python -m {pkg_name}")
     elif has_typescript:
-        typer.echo("  npm install  [not executed]")
-        typer.echo("  npm run build  [not executed]")
-        typer.echo("  npm start  [not executed]")
+        typer.echo("  npm install && npm run build && npm start")
     elif has_helm:
         typer.echo(
-            f"  review and customize Chart.yaml and values.yaml (placeholder image "
-            f"ghcr.io/example/{name} is not a live image)  [not executed]"
-        )
-    elif has_rails:
-        typer.echo(
-            "  EXPERIMENTAL layout sketch only — missing config/boot.rb, "
-            "config/environment.rb, config/routes.rb, bin/rails, Rakefile, "
-            "app/views/, and db/; do not run a server expecting this layout to boot. "
-            "Run `rails new` with Ruby >= 3.1 for a runnable Rails app  [not executed]"
+            f"  review Chart.yaml and values.yaml (placeholder image ghcr.io/example/{name})"
         )
     else:
         typer.echo(
-            f"  review AGENTS.md and {preset.prompts_file} to begin agent workflows "
-            "(no language runtime or package manager in this scaffold)  [not executed]"
+            f"  review AGENTS.md and {preset.prompts_file} to begin agent workflows"
         )
     if has_graphify and not graphify_ran_msg:
-        typer.echo(
-            "  graphify update .  # optional: requires external graphify CLI to "
-            "populate graphify-out/graph.json  [not executed]"
-        )
+        typer.echo("  graphify update .  # optional: requires external graphify CLI")
 
     typer.echo("User-runnable verification checks (not executed by projboot):")
     if has_python:
-        if "tests/test_appstarter.py" in files:
-            typer.echo("  pip install pytest && pytest  [not executed]")
-        typer.echo("  pip install build && python -m build  [not executed]")
+        if f"tests/test_{pkg_name}.py" in files:
+            typer.echo("  pip install pytest && pytest")
+        typer.echo("  pip install build && python -m build")
     elif has_typescript:
         typer.echo(
-            "  npm run build  # compiles src/index.ts to dist/index.js via tsc "
-            "(after npm install)  [not executed]"
-        )
-        typer.echo(
-            "  npm start  # runs node dist/index.js (no test runner or test script "
-            "is configured in package.json)  [not executed]"
+            "  npm run build && npm start  # no test script is configured in package.json"
         )
     elif has_helm:
-        typer.echo("  helm lint .  # requires helm CLI on PATH  [not executed]")
-        typer.echo(
-            f"  helm template {name} .  # renders manifests locally without a "
-            "Kubernetes cluster  [not executed]"
-        )
-    elif has_rails:
-        typer.echo(
-            "  ruby -c config/application.rb && ruby -c "
-            "app/controllers/application_controller.rb  # syntax-only check on "
-            "generated files; application boot and test suite are unavailable for "
-            "this experimental layout  [not executed]"
-        )
+        typer.echo(f"  helm lint . && helm template {name} .")
     else:
-        typer.echo(
-            f"  no language build, lint, or test checks apply to --lang {lang} "
-            "(no runtime or test runner generated)  [not executed]"
-        )
+        typer.echo(f"  no language build, lint, or test checks apply to --lang {lang}")
 
     typer.echo("Unverified / pending items:")
     typer.echo(
         "  dependencies and project checks: not installed, built, or executed by projboot"
     )
-    if has_rails:
-        typer.echo(
-            "  rails profile: experimental directory sketch only; not a bootable or "
-            "verified Rails application"
-        )
     if has_helm:
         typer.echo(
-            "  helm deployment: local chart scaffold only; helm lint/template and "
-            "Kubernetes cluster deployment were not run, and "
-            f"ghcr.io/example/{name} is an unverified placeholder image"
+            "  helm deployment: local chart scaffold only; cluster deployment was not run"
         )
     if preset.agents:
         typer.echo(
@@ -1070,7 +1039,7 @@ def preview(
         "python",
         "--lang",
         "-l",
-        help="Language/base template (python, python-microservice, typescript, rails, helm-chart, none)",
+        help="Language/base template (python, python-microservice, typescript, helm-chart, none)",
     ),
     agent: list[str] = typer.Option(
         [],
@@ -1085,7 +1054,7 @@ def preview(
         help="Workflow preset name (see list-presets)",
     ),
     arch: str | None = typer.Option(
-        None, "--arch", help="Override architecture style in agent instructions"
+        None, "--arch", help="Architecture style (modular, hexagonal, clean-architecture, layered)"
     ),
     outputs_dir: str | None = typer.Option(
         None, "--outputs-dir", help="Override directory for generated outputs"
@@ -1095,6 +1064,17 @@ def preview(
     ),
     prompts_file: str | None = typer.Option(
         None, "--prompts-file", help="Override ordered prompts catalog file path"
+    ),
+    from_tree: Path | None = typer.Option(
+        None,
+        "--from-tree",
+        "-t",
+        exists=True,
+        readable=True,
+        help="Preview merging additional layout paths from a dirtree file",
+    ),
+    gitkeep: bool = typer.Option(
+        False, "--gitkeep", help="Include .gitkeep in empty directories from --from-tree"
     ),
     remote: str | None = typer.Option(
         None, "--remote", "-r", help="Remote provider (e.g. 'github')"
@@ -1147,6 +1127,8 @@ def preview(
         holder=holder,
         variable=variable,
         no_graphify=no_graphify,
+        from_tree=from_tree,
+        gitkeep=gitkeep,
     )
 
     # Fail on exactly the collisions/refusals `create` would hit, before the
@@ -1169,7 +1151,7 @@ def preview(
     )
 
 
-@app.command()
+@app.command(deprecated=True)
 def init(
     name: str = typer.Option(..., help="Project/repository name"),
     template: str = typer.Option(
@@ -1192,7 +1174,7 @@ def init(
         help="Merge into a non-empty local target or use an existing remote; pushes never rewrite remote history",
     ),
 ) -> None:
-    """Create a project scaffold from a curated template."""
+    """Create a project scaffold from a curated template (deprecated: use `create`)."""
     _validate_name(name)
     variables = _variables(name, description, holder, _parse_vars(variable))
     files = _build_template_files(template, variables, license)
@@ -1207,7 +1189,7 @@ def init(
     )
 
 
-@app.command("init-from-tree")
+@app.command("init-from-tree", deprecated=True)
 def init_from_tree(
     name: str = typer.Option(..., help="Project/repository name"),
     tree_file: Path = typer.Option(
@@ -1228,7 +1210,7 @@ def init_from_tree(
         help="Merge into a non-empty local target or use an existing remote; pushes never rewrite remote history",
     ),
 ) -> None:
-    """Create a project scaffold from a dirtree layout file."""
+    """Create a project scaffold from a dirtree layout file (deprecated: use `create --from-tree`)."""
     _validate_name(name)
     files = _tree_to_files(tree_file, gitkeep)
     _emit(

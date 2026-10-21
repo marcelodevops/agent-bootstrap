@@ -1,44 +1,8 @@
 from unittest.mock import MagicMock
 
 import pytest
-from github.GithubException import GithubException
 
-from bootstrapper.github_utils import RepoExistsError, add_file, create_repo
-
-
-def _unprocessible():
-    return GithubException(422, {"message": "already exists"}, {})
-
-
-def test_add_file_creates_on_fresh_repo():
-    repo = MagicMock()
-    repo.create_file.return_value = {}  # bootstraps empty repo, no error
-    add_file(repo, "README.md", "hi")
-    repo.create_file.assert_called_once_with("README.md", "Add file", "hi")
-    repo.update_file.assert_not_called()
-
-
-def test_add_file_updates_when_path_exists():
-    repo = MagicMock()
-    repo.create_file.side_effect = _unprocessible()
-    repo.default_branch = "main"
-    existing = MagicMock()
-    existing.sha = "deadbeef"
-    repo.get_contents.return_value = existing
-
-    add_file(repo, "README.md", "v2", message="Update")
-
-    repo.get_contents.assert_called_once_with("README.md", ref="main")
-    repo.update_file.assert_called_once_with(
-        "README.md", "Update", "v2", "deadbeef"
-    )
-
-
-def test_add_file_reraises_non_422():
-    repo = MagicMock()
-    repo.create_file.side_effect = GithubException(401, {"message": "bad"}, {})
-    with pytest.raises(GithubException):
-        add_file(repo, "x", "y")
+from bootstrapper.github_utils import RepoExistsError, create_repo
 
 
 def test_create_repo_refuses_existing_without_force():

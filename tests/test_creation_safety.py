@@ -139,7 +139,6 @@ def test_trailing_line_ending_name_writes_nothing_anywhere(
     monkeypatch.setattr(gu, "get_github", _remote_spy)
     monkeypatch.setattr(gu, "get_owner", _remote_spy)
     monkeypatch.setattr(gu, "create_repo", _remote_spy)
-    monkeypatch.setattr(gu, "add_file", _remote_spy)
 
     res = _run(
         ["create", name, "-l", "none", "--no-git", "--no-graphify",
