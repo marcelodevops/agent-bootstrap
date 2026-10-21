@@ -474,6 +474,7 @@ def render(text: str, **variables: str) -> str:
         normalized = unicodedata.normalize("NFKD", variables["name"])
         ascii_name = normalized.encode("ascii", "ignore").decode("ascii").lower()
         helm_name = re.sub(r"[^a-z0-9]+", "-", ascii_name).strip("-") or "chart"
+        helm_name = helm_name[:63].rstrip("-") or "chart"
         derived_pkg = derive_pkg_name(variables["name"])
         variables = {
             "helm_name": helm_name,

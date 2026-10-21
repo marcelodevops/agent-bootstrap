@@ -467,7 +467,11 @@ def _resolve_options_and_compose(
         if from_tree is not None:
             tree_files = _tree_to_files(from_tree, gitkeep)
             for rel, content in tree_files.items():
-                files.setdefault(rel, content)
+                if rel in files:
+                    raise PathCollisionError(
+                        f"--from-tree path {rel!r} collides with a generated file"
+                    )
+                files[rel] = content
             find_output_conflicts(files)
     except KeyError as exc:
         raise typer.BadParameter(str(exc)) from exc
