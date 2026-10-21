@@ -11,7 +11,7 @@ import tempfile
 
 from .agents import agent_overlay_files, universal_harness_files
 from .presets import PresetConfig
-from .templates import LICENSES, get_template, render
+from .templates import LICENSES, arch_layout_files, get_template, render
 
 DEFAULT_GRAPHIFY_BIN = Path("~/.local/bin/graphify")
 
@@ -109,11 +109,14 @@ def compose_project_files(
 
     raw_files: dict[str, str] = {}
     _merge(raw_files, get_template(lang)["files"], "base template")
+    _merge(raw_files, arch_layout_files(lang, preset.arch), "architecture layout")
     _merge(raw_files, harness, "agent harness")
     _merge(
         raw_files,
         agent_overlay_files(
             preset.agents,
+            lang=lang,
+            arch=preset.arch,
             include_graphify=include_graphify,
             remember_files=remember_files,
             skill_files=skill_files,
@@ -267,10 +270,16 @@ def run_post_hooks(
 def _git_ok(cwd: Path, cmd: list[str], *, env: dict[str, str] | None = None) -> bool:
     """Run a best-effort git command; True on success, False otherwise."""
     try:
-        kwargs = {"cwd": cwd, "check": True, "capture_output": True, "text": True}
+        kwargs: dict = {"cwd": cwd, "check": True, "capture_output": True, "text": True}
         if env is not None:
-            kwargs["env"] = env
-        subprocess.run(cmd, **kwargs)
+            kwargs["env"] = {**os.environ, "GIT_TERMINAL_PROMPT": "0", **env}
+        elif "push" in cmd:
+            kwargs["env"] = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+        try:
+            subprocess.run(cmd, **kwargs)
+        except TypeError:
+            kwargs.pop("env", None)
+            subprocess.run(cmd, **kwargs)
         return True
     except (OSError, subprocess.CalledProcessError):
         return False

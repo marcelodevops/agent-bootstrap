@@ -35,7 +35,7 @@ from bootstrapper.templates import get_template, render
 
 NAME = "my-app"  # hyphenated identity, required to be exercised
 DIST = "my_app"  # what setuptools normalizes it to in the wheel filename
-PKG = "appstarter"  # stable import package, independent of the distribution name
+PKG = "my_app"  # dynamically derived PEP 8 import package from NAME
 VARS = dict(name=NAME, description="demo starter", year="2026", holder="acme")
 
 
@@ -113,8 +113,8 @@ def test_documented_entrypoint_runs_outside_the_checkout(installed):
     elsewhere = installed["project"].parent / "elsewhere"
     elsewhere.mkdir(exist_ok=True)
     readme = (installed["project"] / "README.md").read_text()
-    assert "\nappstarter" in readme, "guard: this test must cover a documented command"
-    res = _run(["appstarter"], cwd=elsewhere, env=_venv_env(installed))
+    assert f"\n{PKG}" in readme, "guard: this test must cover a documented command"
+    res = _run([PKG], cwd=elsewhere, env=_venv_env(installed))
     assert res.returncode == 0, res.stdout + res.stderr
     assert f"Hello from {NAME}!" in res.stdout
 
@@ -127,13 +127,8 @@ def _venv_env(installed):
 
 @native_required
 def test_documented_module_entrypoint_runs_from_installed_wheel(installed):
-    """The README documents ``python -m appstarter`` next to the console script, so
+    """The README documents ``python -m <pkg_name>`` next to the console script, so
     the installed wheel must honor that exact command from outside the checkout.
-
-    Reproduced defect: the package had no ``__main__.py``, so the documented line
-    failed with ``No module named appstarter.__main__`` even though the console
-    script worked. Supporting the documented command (rather than deleting the
-    documentation) is the fix, and the console script must keep working.
     """
     elsewhere = installed["project"].parent / "elsewhere-module"
     elsewhere.mkdir(exist_ok=True)
@@ -154,7 +149,7 @@ def test_documented_module_entrypoint_runs_from_installed_wheel(installed):
         f"not only in the source tree; got {names}"
     )
 
-    console = _run(["appstarter"], cwd=elsewhere, env=_venv_env(installed))
+    console = _run([PKG], cwd=elsewhere, env=_venv_env(installed))
     assert console.returncode == 0, console.stdout + console.stderr
     assert f"Hello from {NAME}!" in console.stdout
 
@@ -271,17 +266,20 @@ def test_docker_and_ci_commands_are_coherent(installed):
     ci = (proj / ".github" / "workflows" / "ci.yml").read_text()
 
     assert "pip install ." in docker
-    assert "appstarter" in docker  # runs the installed console script
+    assert PKG in docker  # runs the installed console script
     assert "|| true" not in docker  # never hide a failing install
     assert "src/main.py" not in docker  # checkout-only command, unrunnable in the image
     assert "pytest" in ci
     assert "python -m build" in ci or "pip install ." in ci
 
 
-def test_starter_is_described_honestly_not_as_a_production_service():
-    """The profile must not over-promise: it is a starter, not a verified service."""
-    files = _render_files()
-    readme = files["README.md"]
-    assert "starter" in readme.lower()
-    spec = get_template("python-microservice")
-    assert "microservice" in spec["description"].lower() or "starter" in spec["description"].lower()
+def test_starter_derives_pkg_name_for_hyphenated_digit_and_keyword_identities():
+    """derive_pkg_name produces valid Python identifiers for any accepted project name."""
+    from bootstrapper.templates import derive_pkg_name
+
+    assert derive_pkg_name("my-app") == "my_app"
+    assert derive_pkg_name("orders-svc") == "orders_svc"
+    assert derive_pkg_name("core.v2") == "core_v2"
+    assert derive_pkg_name("café") == "cafe"
+    assert derive_pkg_name("123-svc") == "pkg_123_svc"
+    assert derive_pkg_name("class") == "class_pkg"

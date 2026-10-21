@@ -5,24 +5,25 @@ from __future__ import annotations
 from pathlib import Path
 
 from .presets import PresetConfig, load_user_store_files
-from .templates import TEMPLATE_ALIASES
+from .templates import TEMPLATE_ALIASES, arch_layer_names
 
 PROFILE_CONTEXT_SPECS: dict[str, dict[str, str]] = {
     "python-microservice": {
-        "profile": "`python-microservice` — Python starter package (`src/appstarter/` layout; starter point, not a production service)",
+        "profile": "`python-microservice` — Python package scaffold (`src/$pkg_name/` layout)",
         "setup": "`python -m venv .venv && source .venv/bin/activate && pip install -e .` (install test and build tools with `pip install pytest build`)",
-        "run": "`appstarter` or `python -m appstarter` (`python src/main.py` is a checkout-only compatibility shim)",
+        "run": "`$pkg_name` or `python -m $pkg_name` (`python src/main.py` is a checkout convenience shim)",
         "test": "`pytest`",
         "build": "`python -m build`",
         "layout": (
             "- `pyproject.toml`, `requirements.txt`, `.env.example`, `.gitignore`, `Dockerfile`, `.github/workflows/ci.yml`, `README.md` — package metadata, dependencies, environment template, ignore rules, container build, and CI workflow\n"
-            "- `src/appstarter/__init__.py`, `src/appstarter/main.py`, `src/appstarter/__main__.py` — installable package and module entrypoint\n"
-            "- `src/main.py` — thin checkout-only compatibility shim\n"
-            "- `tests/test_appstarter.py` — starter test suite"
+            "- `src/$pkg_name/__init__.py`, `src/$pkg_name/main.py`, `src/$pkg_name/__main__.py` — installable package and module entrypoint\n"
+            "- `src/main.py` — thin checkout convenience shim\n"
+            "- `tests/test_$pkg_name.py` — starter test suite"
         ),
+        "stack_hint": "Python >= 3.11 (`src/$pkg_name/` package layout, PEP 621 `pyproject.toml`, type annotations)",
     },
     "typescript": {
-        "profile": "`typescript` — TypeScript Node.js starter (`nodenext` module configuration)",
+        "profile": "`typescript` — TypeScript Node.js service (`nodenext` module configuration)",
         "setup": "`npm install` (no lockfile is generated initially)",
         "run": "`npm start` (runs `node dist/index.js` after building)",
         "test": "Unavailable — no test runner or test script is configured in `package.json`",
@@ -32,6 +33,7 @@ PROFILE_CONTEXT_SPECS: dict[str, dict[str, str]] = {
             "- `src/index.ts` — TypeScript entrypoint\n"
             "- `Dockerfile`, `.gitignore`, `README.md` — multi-stage container build, ignore rules, and project overview"
         ),
+        "stack_hint": "TypeScript strict mode (`ES2022`, `nodenext` module resolution in `src/`, compiled output in `dist/`)",
     },
     "helm-chart": {
         "profile": "`helm-chart` — Helm v2 application chart scaffold",
@@ -44,18 +46,7 @@ PROFILE_CONTEXT_SPECS: dict[str, dict[str, str]] = {
             "- `templates/_helpers.tpl`, `templates/deployment.yaml`, `templates/service.yaml` — chart helpers and workload/service manifests\n"
             "- `.github/workflows/helm-lint.yml` — CI workflow for chart validation"
         ),
-    },
-    "rails": {
-        "profile": "`rails` — **Experimental** layout sketch only (not a runnable Rails application and not `rails new` output)",
-        "setup": "Unavailable — incomplete skeleton missing `config/boot.rb`, `config/environment.rb`, `config/routes.rb`, `bin/rails`, and `Rakefile`; requires Ruby >= 3.1 and `bundle install` only after completing the application",
-        "run": "Unavailable — experimental layout does not boot an application server as generated",
-        "test": "Unavailable — no test suite is generated (syntax-only check on generated Ruby files: `ruby -c config/application.rb && ruby -c app/controllers/application_controller.rb`)",
-        "build": "Unavailable — no build step is configured",
-        "layout": (
-            "- `Gemfile`, `config.ru` — dependency declarations and Rack entrypoint sketch\n"
-            "- `config/application.rb`, `app/controllers/application_controller.rb` — application module and base controller\n"
-            "- `README.md` — experimental scope and missing preparation checklist"
-        ),
+        "stack_hint": "Helm v2 chart (`Chart.yaml`, parameterized `values.yaml`, Kubernetes manifests in `templates/`)",
     },
     "none": {
         "profile": "`none` — Minimal agent-only repository without a language runtime or build toolchain",
@@ -64,6 +55,7 @@ PROFILE_CONTEXT_SPECS: dict[str, dict[str, str]] = {
         "test": "Unavailable — no test runner is configured",
         "build": "Unavailable — no build system is configured",
         "layout": "- `README.md`, `.gitignore` — repository overview and ignore rules",
+        "stack_hint": "Language-agnostic agent workspace (`AGENTS.md`, `$prompts_file`, `.remember/`, `.agents/skills/`)",
     },
 }
 
@@ -99,6 +91,7 @@ def _primary_memory_ref(remember_files: list[str] | None) -> str:
 def build_agents_md_template(
     lang: str = "none",
     *,
+    arch: str = "modular",
     include_graphify: bool = True,
     remember_files: list[str] | None = None,
     skill_files: list[str] | None = None,
@@ -123,6 +116,12 @@ def build_agents_md_template(
         harness_tokens.append("`graphify-out/.gitkeep`")
     harness_line = ", ".join(harness_tokens)
 
+    arch_dirs = arch_layer_names(resolved, arch)
+    arch_layout_line = ""
+    if arch_dirs:
+        arch_tokens = ", ".join(f"`{d}`" for d in arch_dirs)
+        arch_layout_line = f"- {arch_tokens} — {arch} architecture layer packages\n"
+
     rem_prose = ", ".join(f"`{p}`" for p in rem_paths)
     sk_prose = ", ".join(f"`{p}`" for p in sk_paths)
 
@@ -139,6 +138,12 @@ def build_agents_md_template(
             "- When the external `graphify` CLI is installed, run `graphify update .` after modifying code files to populate or refresh `graphify-out/`.\n"
         )
 
+    arch_desc = (
+        f"`$arch` (scaffolded layer directories: {', '.join(f'`{d}`' for d in arch_dirs)})"
+        if arch_dirs
+        else "`$arch` (module organization convention)"
+    )
+
     return (
         "# AGENTS.md — $name\n\n"
         "$description\n\n"
@@ -150,9 +155,10 @@ def build_agents_md_template(
         f"- **Build**: {spec['build']}\n\n"
         "## Generated Project Layout\n\n"
         f"{spec['layout']}\n"
+        f"{arch_layout_line}"
         f"- {harness_line} — shared agent instructions, prompt catalog, output/script directories, memory, and skills\n\n"
         "## Project Architecture & Layout\n\n"
-        "- **Architecture Style**: `$arch` (instructional convention preference for organizing modules and boundaries)\n"
+        f"- **Architecture Style**: {arch_desc}\n"
         "- **Outputs Directory**: `$outputs_dir/` — place all generated artifacts, reports, and exports here.\n"
         "- **Scripts Directory**: `$scripts_dir/` — store helper, automation, and maintenance scripts here.\n"
         "- **Ordered Prompts File**: `$prompts_file` — maintain ordered prompts and reusable agent instructions here.\n"
@@ -200,11 +206,23 @@ PROMPTS_MD_TEMPLATE = build_prompts_md_template(include_graphify=True)
 
 def build_agent_overlays(
     *,
+    lang: str = "none",
+    arch: str = "modular",
     include_graphify: bool = True,
     remember_files: list[str] | None = None,
     skill_files: list[str] | None = None,
 ) -> dict[str, dict[str, str]]:
-    """Build assistant overlay template bodies with conditional Graphify and memory references."""
+    """Build stack-aware assistant overlay templates referencing AGENTS.md."""
+    resolved = TEMPLATE_ALIASES.get(lang, lang)
+    spec = PROFILE_CONTEXT_SPECS.get(resolved, PROFILE_CONTEXT_SPECS["none"])
+    stack_hint = spec["stack_hint"]
+    arch_dirs = arch_layer_names(resolved, arch)
+    arch_hint = (
+        f"`$arch` (layers: {', '.join(f'`{d}`' for d in arch_dirs)})"
+        if arch_dirs
+        else "`$arch`"
+    )
+
     rem_paths = _resolve_remember_paths(remember_files)
     primary_memory = _primary_memory_ref(remember_files)
     rem_list = ", ".join(f"`{p}`" for p in rem_paths)
@@ -233,8 +251,9 @@ def build_agent_overlays(
                 f"Read and follow @AGENTS.md and @{primary_memory} at the start of every session.\n"
                 "`AGENTS.md` defines the authoritative profile commands (setup, run, test, build), "
                 "generated layout, and change boundaries.\n\n"
-                "## Quick Conventions\n"
-                "- **Architecture**: `$arch`\n"
+                "## Stack & Conventions\n"
+                f"- **Stack**: {stack_hint}\n"
+                f"- **Architecture**: {arch_hint}\n"
                 "- **Outputs folder**: `$outputs_dir/`\n"
                 "- **Scripts folder**: `$scripts_dir/`\n"
                 "- **Ordered prompts**: `$prompts_file`\n"
@@ -249,7 +268,8 @@ def build_agent_overlays(
                 "$description\n\n"
                 "## Workspace Conventions\n"
                 f"- Read `AGENTS.md` and `{primary_memory}` first; `AGENTS.md` is the single source of truth for profile setup, run, test, and build commands and layout.\n"
-                "- Follow the **$arch** architecture pattern.\n"
+                f"- Stack profile: {stack_hint}.\n"
+                f"- Follow the **{arch_hint}** architecture pattern.\n"
                 "- Save generated outputs and reports in `$outputs_dir/`.\n"
                 "- Place helper and automation scripts in `$scripts_dir/`.\n"
                 "- Keep ordered prompts in `$prompts_file`.\n"
@@ -269,7 +289,8 @@ def build_agent_overlays(
             ".codeassistant/instructions.md": (
                 "# CodeAssistant Instructions — $name\n\n"
                 "- **Shared Context**: Read `AGENTS.md` for profile setup, run, test, and build commands and generated layout.\n"
-                "- **Architecture**: `$arch`\n"
+                f"- **Stack**: {stack_hint}\n"
+                f"- **Architecture**: {arch_hint}\n"
                 "- **Outputs Directory**: `$outputs_dir/`\n"
                 "- **Scripts Directory**: `$scripts_dir/`\n"
                 "- **Prompts Log**: `$prompts_file`\n"
@@ -287,7 +308,8 @@ def build_agent_overlays(
                 "---\n\n"
                 "# $name Rules\n\n"
                 f"- Read `AGENTS.md` and `{primary_memory}`; follow the profile commands and change boundaries in `AGENTS.md`.\n"
-                "- Follow `$arch` architecture.\n"
+                f"- Stack: {stack_hint}.\n"
+                f"- Follow {arch_hint} architecture.\n"
                 "- Put outputs in `$outputs_dir/`, scripts in `$scripts_dir/`, and prompts in `$prompts_file`.\n"
             ),
         },
@@ -320,6 +342,7 @@ def universal_harness_files(
     files: dict[str, str] = {
         "AGENTS.md": build_agents_md_template(
             lang,
+            arch=preset.arch,
             include_graphify=include_graphify,
             remember_files=remember_files,
             skill_files=skill_files,
@@ -340,12 +363,16 @@ def universal_harness_files(
 def agent_overlay_files(
     agents: list[str],
     *,
+    lang: str = "none",
+    arch: str = "modular",
     include_graphify: bool = True,
     remember_files: list[str] | None = None,
     skill_files: list[str] | None = None,
 ) -> dict[str, str]:
     """Return unrendered template bodies for the selected `-a` assistant adapters."""
     overlays = build_agent_overlays(
+        lang=lang,
+        arch=arch,
         include_graphify=include_graphify,
         remember_files=remember_files,
         skill_files=skill_files,

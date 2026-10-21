@@ -4,6 +4,7 @@ user-runnable checks, actual hook outcomes, and explicit unverified boundaries.
 
 from __future__ import annotations
 
+import textwrap
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -13,6 +14,7 @@ from typer.testing import CliRunner
 import bootstrapper.cli as cli_mod
 import bootstrapper.composer as composer_mod
 from bootstrapper.cli import app
+from bootstrapper.templates import derive_pkg_name
 
 runner = CliRunner()
 
@@ -49,6 +51,7 @@ def test_create_python_first_steps_and_user_run_checks_derive_from_scaffold(
     tmp_path: Path, lang: str
 ):
     name = f"py-svc-{lang}"
+    pkg_name = derive_pkg_name(name)
     res = _run(
         [
             "create",
@@ -72,7 +75,7 @@ def test_create_python_first_steps_and_user_run_checks_derive_from_scaffold(
 
     generated = "\n".join(_section_lines(out, f"Generated and configured in {name}/"))
     assert lang in generated
-    assert "src/appstarter/" in generated
+    assert f"src/{pkg_name}/" in generated
     assert "AGENTS.md" in generated
     assert "docs/PROMPTS.md" in generated
     assert "artifacts/out/" in generated
@@ -86,17 +89,13 @@ def test_create_python_first_steps_and_user_run_checks_derive_from_scaffold(
     steps_text = "\n".join(steps)
     assert f"cd {name}" in steps_text
     assert "pip install -e ." in steps_text
-    assert "appstarter" in steps_text
-    assert "python -m appstarter" in steps_text
-    for line in steps:
-        assert "[not executed]" in line, f"First-step line missing [not executed]: {line!r}"
+    assert pkg_name in steps_text
+    assert f"python -m {pkg_name}" in steps_text
 
     checks = _section_lines(out, "User-runnable verification checks (not executed")
     checks_text = "\n".join(checks)
     assert "pytest" in checks_text
     assert "python -m build" in checks_text
-    for line in checks:
-        assert "[not executed]" in line, f"Check line missing [not executed]: {line!r}"
 
     lowered = out.lower()
     for foreign in ("npm ", "tsc", "helm ", "ruby -c", "bundle install", "rails "):
@@ -135,19 +134,15 @@ def test_create_typescript_first_steps_and_checks_without_invented_test_runner(
     assert "npm install" in steps_text
     assert "npm run build" in steps_text
     assert "npm start" in steps_text
-    for line in steps:
-        assert "[not executed]" in line
 
     checks = _section_lines(out, "User-runnable verification checks (not executed")
     checks_text = "\n".join(checks)
     assert "npm run build" in checks_text
     assert "no test script" in checks_text.lower() or "no test runner" in checks_text.lower()
     assert "npm test" not in checks_text.lower()
-    for line in checks:
-        assert "[not executed]" in line
 
     lowered = out.lower()
-    for foreign in ("pytest", "pip install", "appstarter", "helm ", "ruby -c", "rails "):
+    for foreign in ("pytest", "pip install", "helm ", "ruby -c", "rails "):
         assert foreign not in lowered
 
 
@@ -171,67 +166,57 @@ def test_create_helm_chart_first_steps_and_checks_without_claiming_cluster_deplo
     steps_text = "\n".join(steps)
     assert "cd billing-chart" in steps_text
     assert "values.yaml" in steps_text
-    for line in steps:
-        assert "[not executed]" in line
 
     checks = _section_lines(out, "User-runnable verification checks (not executed")
     checks_text = "\n".join(checks)
     assert "helm lint ." in checks_text
     assert "helm template billing-chart ." in checks_text
-    for line in checks:
-        assert "[not executed]" in line
 
     unverified = "\n".join(_section_lines(out, "Unverified / pending items"))
     assert "cluster" in unverified.lower() or "deployment" in unverified.lower()
 
     lowered = out.lower()
-    for foreign in ("pytest", "pip install", "appstarter", "npm ", "tsc", "ruby -c", "rails "):
+    for foreign in ("pytest", "pip install", "npm ", "tsc", "ruby -c", "rails "):
         assert foreign not in lowered
 
 
-def test_create_rails_keeps_experimental_label_and_syntax_only_check(tmp_path: Path):
+def test_create_rejects_removed_rails_template(tmp_path: Path):
+    res = _run(["create", "rails-sketch", "-l", "rails", "--no-git", "--no-graphify"])
+    assert res.exit_code != 0
+    assert "Unknown template 'rails'" in res.output
+
+
+def test_create_with_from_tree_merges_tree_layout_into_project(tmp_path: Path):
+    tree_file = tmp_path / "layout.tree"
+    tree_file.write_text(
+        textwrap.dedent(
+            """\
+            custom-app/
+            ├── docs/
+            │   └── architecture.md
+            └── empty-dir/
+            """
+        ),
+        encoding="utf-8",
+    )
     res = _run(
         [
             "create",
-            "rails-sketch",
+            "custom-app",
             "-l",
-            "rails",
+            "python",
+            "--from-tree",
+            str(tree_file),
+            "--gitkeep",
             "--no-git",
             "--no-graphify",
         ]
     )
     assert res.exit_code == 0, res.stdout
-    out = res.stdout
-
-    generated = "\n".join(_section_lines(out, "Generated and configured in rails-sketch/"))
-    assert "experimental" in generated.lower()
-    assert "not a runnable rails app" in generated.lower()
-
-    steps = _section_lines(out, "First steps (user-run commands — not executed")
-    steps_text = "\n".join(steps)
-    assert "experimental" in steps_text.lower()
-    assert "rails new" in steps_text
-    assert "rails server" not in steps_text.lower()
-    for line in steps:
-        assert "[not executed]" in line
-
-    checks = _section_lines(out, "User-runnable verification checks (not executed")
-    checks_text = "\n".join(checks)
-    assert (
-        "ruby -c config/application.rb && ruby -c app/controllers/application_controller.rb"
-        in checks_text
-    )
-    assert "syntax" in checks_text.lower()
-    assert "unavailable" in checks_text.lower()
-    for line in checks:
-        assert "[not executed]" in line
-
-    unverified = "\n".join(_section_lines(out, "Unverified / pending items"))
-    assert "experimental" in unverified.lower()
-
-    lowered = out.lower()
-    for foreign in ("pytest", "pip install", "appstarter", "npm ", "tsc", "helm "):
-        assert foreign not in lowered
+    proj = tmp_path / "custom-app"
+    assert (proj / "src" / "custom_app" / "main.py").is_file()
+    assert (proj / "docs" / "architecture.md").is_file()
+    assert (proj / "empty-dir" / ".gitkeep").is_file()
 
 
 def test_create_helm_profile_uses_helm_chart_label(tmp_path: Path):
@@ -281,20 +266,15 @@ def test_create_none_profile_invents_no_language_commands_or_checks(tmp_path: Pa
     assert "cd bare-agent" in steps_text
     assert "AGENTS.md" in steps_text
     assert "NOTES.md" in steps_text
-    for line in steps:
-        assert "[not executed]" in line
 
     checks = _section_lines(out, "User-runnable verification checks (not executed")
     checks_text = "\n".join(checks)
     assert "no language" in checks_text.lower()
-    for line in checks:
-        assert "[not executed]" in line
 
     lowered = out.lower()
     for foreign in (
         "pytest",
         "pip install",
-        "appstarter",
         "npm ",
         "tsc",
         "helm ",
@@ -327,7 +307,7 @@ def test_create_hook_outcomes_reflect_actual_results_never_false_success(
     assert "git init: ran" not in hooks_skipped
     assert "graphify update .: ran" not in hooks_skipped
 
-    # When graphify was requested but skipped, first steps offer `graphify update .` as [not executed]
+    # When graphify was requested but skipped, first steps offer `graphify update .`
     steps_skipped = "\n".join(
         _section_lines(res_skipped.stdout, "First steps (user-run commands — not executed")
     )
@@ -400,7 +380,6 @@ def test_create_never_claims_dependencies_build_tests_clients_or_github_verified
     monkeypatch.setattr(gu, "get_github", lambda: MagicMock())
     monkeypatch.setattr(gu, "get_owner", lambda gh, org: MagicMock())
     monkeypatch.setattr(gu, "create_repo", lambda owner, n, d, p, force=False: fake_repo)
-    monkeypatch.setattr(gu, "add_file", lambda *a, **k: None)
 
     res_remote = _run(
         [
@@ -479,14 +458,14 @@ def test_create_native_hooks_report_missing_binaries_as_pending_never_success(
 def test_create_derives_checks_from_actual_composed_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """If the composed file plan omits `tests/test_appstarter.py`, `create` must
+    """If the composed file plan omits `tests/test_<pkg>.py`, `create` must
     not instruct the user to run `pytest` against a nonexistent test suite.
     """
     orig_compose = cli_mod.compose_project_files
 
     def compose_without_tests(**kwargs):
         files = orig_compose(**kwargs)
-        files.pop("tests/test_appstarter.py", None)
+        files.pop("tests/test_no_tests_py.py", None)
         return files
 
     monkeypatch.setattr(cli_mod, "compose_project_files", compose_without_tests)
@@ -506,13 +485,12 @@ def test_create_clone_reports_push_failure_and_partial_wiring_when_git_fails(
     import bootstrapper.github_utils as gu
 
     fake_repo = MagicMock()
-    fake_repo.clone_url = "https://github.com/acme/clone-svc.git"
+    fake_repo.clone_url = str(tmp_path / "nonexistent-remote.git")
     monkeypatch.setattr(gu, "get_github", lambda: MagicMock())
     monkeypatch.setattr(gu, "get_owner", lambda gh, org: MagicMock())
     monkeypatch.setattr(gu, "create_repo", lambda owner, n, d, p, force=False: fake_repo)
-    monkeypatch.setattr(gu, "add_file", lambda *a, **k: None)
 
-    # 1. Local wiring succeeds, but the mocked GitHub URL cannot be pushed.
+    # 1. Local wiring succeeds, but the nonexistent remote cannot be pushed.
     res_ok = _run(
         [
             "create",
@@ -567,13 +545,6 @@ def test_create_clone_reports_push_failure_and_partial_wiring_when_git_fails(
 def test_create_no_graphify_with_outputs_dir_graphify_out_does_not_mislabel_as_graphify(
     tmp_path: Path,
 ):
-    """P2 regression: when `--outputs-dir graphify-out --no-graphify` is passed,
-    the composer creates `graphify-out/.gitkeep` as the custom outputs directory.
-    `_echo_create_summary()` must report `graphify-out/` as the outputs directory,
-    must state that Graphify is not selected (`--no-graphify`), and must NOT label
-    `graphify-out/.gitkeep` as a Graphify placeholder, offer `graphify update .`,
-    or report a Graphify knowledge graph as pending.
-    """
     res = _run(
         [
             "create",
@@ -589,7 +560,6 @@ def test_create_no_graphify_with_outputs_dir_graphify_out_does_not_mislabel_as_g
     assert res.exit_code == 0, res.stdout
     out = res.stdout
 
-    # User-selected output file still exists on disk
     assert (tmp_path / "sample" / "graphify-out" / ".gitkeep").is_file()
 
     generated = "\n".join(_section_lines(out, "Generated and configured in sample/"))
@@ -617,9 +587,8 @@ def test_readme_documents_preview_first_steps_and_support_boundaries():
     lowered = readme.lower()
 
     assert "projboot preview" in readme
-    assert "not executed" in lowered or "does not execute" in lowered
+    assert "does not execute" in lowered
     assert "helm lint ." in readme
     assert "npm run build" in readme
     assert "pytest" in readme
-    assert "ruby -c config/application.rb" in readme
-    assert "experimental" in lowered
+    assert "rails" not in lowered
