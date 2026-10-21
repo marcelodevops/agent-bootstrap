@@ -219,6 +219,26 @@ def test_create_with_from_tree_merges_tree_layout_into_project(tmp_path: Path):
     assert (proj / "empty-dir" / ".gitkeep").is_file()
 
 
+def test_create_with_from_tree_rejects_generated_file_collision(tmp_path: Path):
+    tree_file = tmp_path / "layout.tree"
+    tree_file.write_text("custom-app/\n└── README.md\n", encoding="utf-8")
+    res = _run(
+        [
+            "create",
+            "custom-app",
+            "-l",
+            "python",
+            "--from-tree",
+            str(tree_file),
+            "--no-git",
+            "--no-graphify",
+        ]
+    )
+    assert res.exit_code != 0
+    assert "collid" in res.output.lower()
+    assert not (tmp_path / "custom-app").exists()
+
+
 def test_create_helm_profile_uses_helm_chart_label(tmp_path: Path):
     res = _run(
         [

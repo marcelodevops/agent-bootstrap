@@ -91,6 +91,16 @@ def test_github_action_expression_survives_as_a_value():
     assert chart["description"] == ACTIONS_VALUE
 
 
+def test_helm_chart_name_is_bounded_by_dns_label_limit():
+    spec = get_template("helm-chart")
+    variables = {**BASE, "name": "a" * 100, "description": "description"}
+    files = {path: render(body, **variables) for path, body in spec["files"].items()}
+    chart = yaml.safe_load(files["Chart.yaml"])
+    assert len(chart["name"]) <= 63
+    assert chart["name"][0].isalnum()
+    assert chart["name"][-1].isalnum()
+
+
 # --- composition callers emit parseable metadata ----------------------------
 
 
